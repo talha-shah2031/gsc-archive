@@ -245,7 +245,7 @@ function Sidebar({
         >
           {selected ? <SiteFavicon siteUrl={selected.siteUrl} /> : <span className="site-avatar">G</span>}
           <span className="property-name">{selected ? prettySite(selected.siteUrl) : "Select property"}</span>
-          <b className={"property-caret" + (pickerOpen ? " open" : "")}>⌄</b>
+          <AppIcon name="chevron" className={"property-caret" + (pickerOpen ? " open" : "")} />
         </button>
         {pickerOpen && (
           <div className="property-menu" role="listbox" aria-label="Search Console properties">
@@ -287,7 +287,7 @@ function Sidebar({
       <nav>
         {navGroups.map((group, groupIndex) => (
           <section className="nav-group" key={group.title || "main"}>
-            {group.title && <div className="nav-heading"><span>{group.title}</span><b>⌃</b></div>}
+            {group.title && <div className="nav-heading"><span>{group.title}</span><b><AppIcon name="chevron" /></b></div>}
             {group.items.map(([key, icon, label]) => (
               <button
                 key={key}
@@ -300,7 +300,7 @@ function Sidebar({
                     : icon}
                 </span>
                 <span>{label}</span>
-                {key === "performance" && <b className="nav-caret">⌄</b>}
+                {key === "performance" && <AppIcon name="chevron" className="nav-caret" />}
               </button>
             ))}
             {groupIndex < navGroups.length - 1 && <div className="nav-divider" />}
@@ -549,10 +549,10 @@ function Performance({
               {range === days && "✓　"}{days === 1 ? "24 hours" : days === 90 ? "3 months" : `${days} days`}
             </button>
           ))}
-          <button>More　⌄</button>
+          <button>More　<AppIcon name="chevron" className="caret-down" /></button>
         </div>
         <span className="filter-divider" />
-        <button className="filter-chip">Search type: Web (text)　⌄</button>
+        <button className="filter-chip">Search type: Web (text)　<AppIcon name="chevron" className="caret-down" /></button>
         <button className="filter-chip">＋　Add filter</button>
         <button className="filter-tune">☷</button>
         <span className="last-update">Final data through 3 days ago</span>
@@ -591,7 +591,7 @@ function Performance({
                 </tbody>
               </table>
               {data.rows.length === 0 && <div className="empty-state">No data was returned for this period.</div>}
-              <div className="pagination">Rows per page:　10　⌄　　 1–{Math.min(100, data.rows.length)} of {data.rows.length}　　‹　›</div>
+              <div className="pagination">Rows per page:　10　<AppIcon name="chevron" className="caret-down" />　　 1–{Math.min(100, data.rows.length)} of {data.rows.length}　　‹　›</div>
             </section>
           </>
         )}
@@ -647,7 +647,7 @@ function Sitemaps({
               </tbody>
             </table>
             {items.length === 0 && <div className="empty-state">No submitted sitemaps found.</div>}
-            <div className="pagination">Rows per page:　10　⌄　　 1–{items.length} of {items.length}　　‹　›</div>
+            <div className="pagination">Rows per page:　10　<AppIcon name="chevron" className="caret-down" />　　 1–{items.length} of {items.length}　　‹　›</div>
           </section>
         )}
       </div>
