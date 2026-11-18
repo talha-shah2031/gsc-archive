@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
@@ -213,21 +213,76 @@ function Sidebar({
   const navigate = (key: string) => {
     if (key === "overview" || key === "performance" || key === "sitemaps") onNavigate(key);
   };
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handlePointer = (event: MouseEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setPickerOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPickerOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [pickerOpen]);
+
   return (
     <aside className="sidebar">
-      <div className="property-picker">
-        {selected ? <SiteFavicon siteUrl={selected.siteUrl} /> : <span className="site-avatar">G</span>}
-        <select
-          aria-label="Search Console property"
-          value={selected?.siteUrl ?? ""}
-          onChange={(event) => {
-            const site = sites.find((item) => item.siteUrl === event.target.value);
-            if (site) onSelect(site);
-          }}
+      <div className="property-picker" ref={pickerRef}>
+        <button
+          type="button"
+          className="property-trigger"
+          aria-haspopup="listbox"
+          aria-expanded={pickerOpen}
+          aria-label="Choose Search Console property"
+          onClick={() => setPickerOpen((open) => !open)}
         >
-          {sites.map((site) => <option key={site.siteUrl} value={site.siteUrl}>{prettySite(site.siteUrl)}</option>)}
-        </select>
-        <button className="add-property" onClick={onAddAccount} aria-label="Add Search Console account">＋</button>
+          {selected ? <SiteFavicon siteUrl={selected.siteUrl} /> : <span className="site-avatar">G</span>}
+          <span className="property-name">{selected ? prettySite(selected.siteUrl) : "Select property"}</span>
+          <b className={"property-caret" + (pickerOpen ? " open" : "")}>⌄</b>
+        </button>
+        {pickerOpen && (
+          <div className="property-menu" role="listbox" aria-label="Search Console properties">
+            {sites.map((site) => {
+              const isSelected = site.siteUrl === selected?.siteUrl;
+              return (
+                <button
+                  key={site.siteUrl}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  className={"property-option" + (isSelected ? " selected" : "")}
+                  onClick={() => {
+                    onSelect(site);
+                    setPickerOpen(false);
+                  }}
+                >
+                  <SiteFavicon siteUrl={site.siteUrl} />
+                  <span>{prettySite(site.siteUrl)}</span>
+                  {isSelected && <b className="property-check">✓</b>}
+                </button>
+              );
+            })}
+            <div className="property-menu-divider" />
+            <button
+              type="button"
+              className="property-add-json"
+              onClick={() => {
+                setPickerOpen(false);
+                onAddAccount();
+              }}
+            >
+              <span className="property-add-json-icon">＋</span>
+              <span>Add GSC JSON</span>
+            </button>
+          </div>
+        )}
       </div>
       <nav>
         {navGroups.map((group, groupIndex) => (
