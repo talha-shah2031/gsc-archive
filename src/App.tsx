@@ -110,11 +110,11 @@ function recommendationDateRanges() {
   const currentEnd = new Date();
   currentEnd.setDate(currentEnd.getDate() - 3);
   const currentStart = new Date(currentEnd);
-  currentStart.setDate(currentStart.getDate() - 27);
+  currentStart.setDate(currentStart.getDate() - 6);
   const previousEnd = new Date(currentStart);
   previousEnd.setDate(previousEnd.getDate() - 1);
   const previousStart = new Date(previousEnd);
-  previousStart.setDate(previousStart.getDate() - 27);
+  previousStart.setDate(previousStart.getDate() - 6);
   return {
     currentStart: isoDate(currentStart),
     currentEnd: isoDate(currentEnd),

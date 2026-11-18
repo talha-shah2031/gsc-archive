@@ -663,7 +663,9 @@ async fn get_recommendations(
                     "A page recently got {} impressions than usual",
                     if increased { "more" } else { "fewer" }
                 ),
-                description: "Check this page's performance to investigate further".to_string(),
+                description:
+                    "Based on the last 7 finalized days compared with the previous 7 days"
+                        .to_string(),
                 page,
                 change_percent: percent.round() as i64,
             }
