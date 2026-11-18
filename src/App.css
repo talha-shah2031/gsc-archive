@@ -24,6 +24,10 @@ button, input, select { font: inherit; }
 button { color: inherit; }
 
 .app-shell { min-height: 100vh; background: #f1f4f9; overflow-x: clip; }
+.app-shell.sidebar-collapsed { --sidebar: 0px; }
+.app-shell.sidebar-collapsed .sidebar { display: none; }
+.app-shell.sidebar-collapsed .brand { width: auto; }
+.sidebar, .main { transition: margin-left .18s ease, width .18s ease, transform .18s ease; }
 .topbar {
   height: var(--header); position: fixed; inset: 0 0 auto 0; z-index: 20;
   display: flex; align-items: center; gap: 12px; padding: 0 18px; background: #f1f4f9;
@@ -304,6 +308,9 @@ td { font-size: 13px; }
   :root { --sidebar: 64px; --header: 62px; }
   .topbar { gap: 5px; padding: 0 8px; }
   .menu-button { display: none; }
+  .app-shell.sidebar-collapsed { --sidebar: 64px; }
+  .app-shell.sidebar-collapsed .sidebar { display: block; }
+  .app-shell.sidebar-collapsed .brand { width: 42px; }
   .brand { width: 42px; }
   .brand span { display: none; }
   .inspect-search { height: 44px; padding: 0 14px; }

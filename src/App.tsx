@@ -175,10 +175,15 @@ function Logo() {
   );
 }
 
-function Header({ site }: { site?: Site }) {
+function Header({ site, sidebarOpen = true, onToggleSidebar }: { site?: Site; sidebarOpen?: boolean; onToggleSidebar?: () => void }) {
   return (
     <header className="topbar">
-      <button className="icon-button menu-button" aria-label="Menu">☰</button>
+      <button
+        className="icon-button menu-button"
+        aria-label={sidebarOpen ? "Hide navigation" : "Show navigation"}
+        aria-expanded={sidebarOpen}
+        onClick={onToggleSidebar}
+      >☰</button>
       <div className="brand"><Logo /><span>Google Search Console</span></div>
       <div className="inspect-search">
         <AppIcon name="search" className="header-search-icon" />
@@ -687,6 +692,7 @@ function App() {
   const [error, setError] = useState("");
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const dates = useMemo(() => dateRange(range), [range]);
 
@@ -773,11 +779,13 @@ function App() {
   }, [page, selectedSite, loadPerformance, loadSitemaps, loadRecommendations]);
 
   const retry = page === "sitemaps" ? loadSitemaps : selectedSite ? loadPerformance : loadSites;
+  const shellClass = "app-shell" + (sidebarOpen ? "" : " sidebar-collapsed");
+  const toggleSidebar = () => setSidebarOpen((open) => !open);
 
   if (needsKey && !loadingSites) {
     return (
-      <div className="app-shell">
-        <Header />
+      <div className={shellClass}>
+        <Header sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
         <main className="main onboarding-main">
           <NoCredentials onAdd={() => setAddAccountOpen(true)} />
         </main>
@@ -787,8 +795,8 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <Header site={selectedSite} />
+    <div className={shellClass}>
+      <Header site={selectedSite} sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
       <Sidebar page={page} sites={sites} selected={selectedSite} onSelect={setSelectedSite} onNavigate={setPage} onAddAccount={() => setAddAccountOpen(true)} />
       <main className="main">
         {loadingSites ? <div className="boot-loading"><LoadingCard message="Connecting to Google Search Console…" /></div> :
