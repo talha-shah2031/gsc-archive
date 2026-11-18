@@ -600,6 +600,24 @@ function Sitemaps({
   );
 }
 
+function NoCredentials({ onAdd }: { onAdd: () => void }) {
+  return (
+    <div className="onboarding">
+      <section className="onboarding-card">
+        <div className="onboarding-icon">▣</div>
+        <h1>No key found</h1>
+        <p>Please add a key to continue.</p>
+        <p className="onboarding-detail">
+          Import your Google Search Console service-account JSON to load your properties.
+          The key is validated with Google, encrypted with Windows DPAPI, and stored only on this device.
+        </p>
+        <button onClick={onAdd}>Add key JSON</button>
+        <small>Your private key is never sent to the dashboard or saved in this project.</small>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [page, setPage] = useState<Page>("overview");
   const [sites, setSites] = useState<Site[]>([]);
@@ -613,6 +631,7 @@ function App() {
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState("");
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [needsKey, setNeedsKey] = useState(false);
 
   const dates = useMemo(() => dateRange(range), [range]);
 
@@ -620,6 +639,14 @@ function App() {
     setLoadingSites(true);
     setError("");
     try {
+      const hasKey = await invoke<boolean>("has_credentials");
+      if (!hasKey) {
+        setNeedsKey(true);
+        setSites([]);
+        setSelectedSite(undefined);
+        return;
+      }
+      setNeedsKey(false);
       const result = await invoke<Site[]>("list_sites");
       setSites(result);
       setSelectedSite((current) => result.find((site) => site.siteUrl === current?.siteUrl) ?? result[0]);
@@ -630,6 +657,11 @@ function App() {
       setLoadingSites(false);
     }
   }, []);
+
+  const handleImported = useCallback(async () => {
+    setNeedsKey(false);
+    await loadSites();
+  }, [loadSites]);
 
   const loadPerformance = useCallback(async () => {
     if (!selectedSite) return;
@@ -687,6 +719,18 @@ function App() {
 
   const retry = page === "sitemaps" ? loadSitemaps : selectedSite ? loadPerformance : loadSites;
 
+  if (needsKey && !loadingSites) {
+    return (
+      <div className="app-shell">
+        <Header />
+        <main className="main onboarding-main">
+          <NoCredentials onAdd={() => setAddAccountOpen(true)} />
+        </main>
+        {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <Header site={selectedSite} />
@@ -698,7 +742,7 @@ function App() {
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} setRange={setRange} setDimension={setDimension} retry={retry} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
-      {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={loadSites} />}
+      {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}
     </div>
   );
 }

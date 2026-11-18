@@ -373,6 +373,22 @@ async fn list_sites_with_token(token: &str) -> Result<Vec<Site>, String> {
 }
 
 #[tauri::command]
+async fn has_credentials() -> Result<bool, String> {
+    if let Ok(directory) = credential_directory() {
+        let index = read_credential_index().await?;
+        if let Some(active_id) = index.active_id {
+            if tokio::fs::try_exists(directory.join(format!("{active_id}.bin")))
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(credentials_path().is_file())
+}
+
+#[tauri::command]
 async fn list_credential_profiles() -> Result<Vec<CredentialProfile>, String> {
     Ok(read_credential_index().await?.profiles)
 }
@@ -639,6 +655,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_sites,
+            has_credentials,
             list_credential_profiles,
             import_service_account,
             activate_credential,
