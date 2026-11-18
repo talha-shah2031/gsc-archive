@@ -412,13 +412,18 @@ function LineChart({
   visibleMetrics?: MetricKey[];
 }) {
   const width = 1100;
-  const height = overview ? 220 : 280;
-  const pad = { left: 42, right: 42, top: 18, bottom: 34 };
+  const height = overview ? 220 : 330;
+  const pad = { left: 48, right: 48, top: 18, bottom: 38 };
   const maxima: Record<MetricKey, number> = {
     clicks: Math.max(1, ...rows.map((row) => row.clicks)),
     impressions: Math.max(1, ...rows.map((row) => row.impressions)),
     ctr: Math.max(0.01, ...rows.map((row) => row.ctr)),
     position: Math.max(1, ...rows.map((row) => row.position)),
+  };
+  const axisMetrics = visibleMetrics.slice(0, 2);
+  const axisValue = (key: MetricKey, tick: number) => {
+    const value = maxima[key] * (1 - tick);
+    return key === "ctr" ? `${(value * 100).toFixed(value < .1 ? 1 : 0)}%` : key === "position" ? value.toFixed(1) : formatCompact(Math.round(value));
   };
   const points = (key: MetricKey) =>
     rows.map((row, index) => {
@@ -432,7 +437,13 @@ function LineChart({
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Search performance chart">
         {ticks.map((tick) => {
           const y = pad.top + tick * (height - pad.top - pad.bottom);
-          return <line key={tick} x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />;
+          return (
+            <g key={tick}>
+              <line x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />
+              {!overview && axisMetrics[0] && <text x={pad.left - 9} y={y + 4} textAnchor="end">{axisValue(axisMetrics[0], tick)}</text>}
+              {!overview && axisMetrics[1] && <text x={width - pad.right + 9} y={y + 4}>{axisValue(axisMetrics[1], tick)}</text>}
+            </g>
+          );
         })}
         {visibleMetrics.includes("clicks") && <polyline points={points("clicks")} className="click-line" />}
         {!overview && visibleMetrics.includes("impressions") && <polyline points={points("impressions")} className="impression-line" />}
@@ -449,8 +460,58 @@ function LineChart({
   );
 }
 
-function LoadingCard({ message = "Loading Search Console data…" }: { message?: string }) {
-  return <div className="loading-card"><span className="spinner" />{message}</div>;
+function Skeleton({ variant }: { variant: "boot" | "overview" | "performance" | "sitemaps" | "recommendations" }) {
+  if (variant === "performance") {
+    return (
+      <div className="skeleton-page" aria-label="Loading performance data" aria-busy="true">
+        <section className="card skeleton-report">
+          <div className="skeleton-metrics">{[0, 1, 2, 3].map((item) => <div className="skeleton-block" key={item}><i /><b /></div>)}</div>
+          <div className="skeleton-chart">
+            <span /><span /><span /><span />
+            <i className="skeleton-line wide" /><i className="skeleton-line medium" />
+          </div>
+        </section>
+        <section className="card skeleton-table">
+          <div className="skeleton-tabs">{[0, 1, 2, 3, 4].map((item) => <i key={item} />)}</div>
+          {[0, 1, 2, 3, 4, 5].map((item) => <div className="skeleton-row" key={item}><i /><i /><i /></div>)}
+        </section>
+      </div>
+    );
+  }
+  if (variant === "sitemaps") {
+    return (
+      <section className="card skeleton-table skeleton-sitemaps" aria-label="Loading sitemaps" aria-busy="true">
+        <div className="skeleton-heading"><i /><i /></div>
+        {[0, 1, 2, 3, 4].map((item) => <div className="skeleton-row" key={item}><i /><i /><i /><i /></div>)}
+      </section>
+    );
+  }
+  if (variant === "recommendations") {
+    return (
+      <section className="recommendations skeleton-recommendations" aria-label="Loading recommendations" aria-busy="true">
+        <div className="skeleton-heading"><i /><i /></div>
+        <div className="skeleton-recommendation-grid">
+          {[0, 1].map((item) => <div className="skeleton-block" key={item}><i /><b /><i /></div>)}
+        </div>
+      </section>
+    );
+  }
+  if (variant === "overview") {
+    return (
+      <section className="card skeleton-overview" aria-label="Loading overview data" aria-busy="true">
+        <div className="skeleton-heading"><i /><i /></div>
+        <div className="skeleton-legend"><i /><i /></div>
+        <div className="skeleton-chart"><span /><span /><span /><span /><i className="skeleton-line wide" /></div>
+      </section>
+    );
+  }
+  return (
+    <div className="boot-skeleton" aria-label="Connecting to Google Search Console" aria-busy="true">
+      <div className="skeleton-heading"><i /><i /></div>
+      <div className="skeleton-block"><i /><b /></div>
+      <div className="skeleton-chart"><span /><span /><span /><span /></div>
+    </div>
+  );
 }
 
 function ErrorCard({ error, retry }: { error: string; retry: () => void }) {
@@ -466,6 +527,7 @@ function ErrorCard({ error, retry }: { error: string; retry: () => void }) {
 function Overview({
   data,
   recommendations,
+  recommendationsLoading,
   loading,
   error,
   retry,
@@ -473,6 +535,7 @@ function Overview({
 }: {
   data?: PerformanceData;
   recommendations: SearchRecommendation[];
+  recommendationsLoading: boolean;
   loading: boolean;
   error: string;
   retry: () => void;
@@ -482,8 +545,8 @@ function Overview({
     <>
       <div className="page-title"><h1>Overview</h1></div>
       <div className="overview-content">
-        <div className="insight-strip"><span className="bulb">♧</span><span>Get insights into your site's Search performance</span><button>Explore your insights　›</button></div>
-        {loading ? <LoadingCard /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
+        <div className="insight-strip"><span className="bulb">♧</span><span>Get insights into your site's Search performance</span><button onClick={openPerformance}>Explore your insights　›</button></div>
+        {loading ? <Skeleton variant="overview" /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
           <section className="card overview-performance">
             <div className="card-heading">
               <h2>Performance</h2>
@@ -493,11 +556,11 @@ function Overview({
             <LineChart rows={data.daily} overview />
           </section>
         )}
+        {!loading && !error && recommendationsLoading && <Skeleton variant="recommendations" />}
         {!loading && !error && recommendations.length > 0 && (
           <section className="recommendations">
             <div className="recommendations-heading">
               <h2>Recommendations <small>?</small></h2>
-              <button>▣　Send feedback</button>
             </div>
             <div className="recommendation-list">
               {recommendations.map((recommendation) => (
@@ -515,7 +578,6 @@ function Overview({
                   </div>
                   <div className="recommendation-actions">
                     <button onClick={openPerformance}>Check page performance</button>
-                    <span>♧　♤</span>
                   </div>
                 </article>
               ))}
@@ -587,6 +649,7 @@ function Performance({
     { key: "discover", label: "Discover" },
     { key: "googleNews", label: "Google News" },
   ];
+  const metricLabels: Record<MetricKey, string> = { clicks: "Clicks", impressions: "Impressions", ctr: "CTR", position: "Position" };
   const rangeLabel = (days: Range) => days === 1 ? "1 day" : days === 90 ? "3 months" : days === 180 ? "6 months" : days === 365 ? "12 months" : days === 480 ? "16 months" : `${days} days`;
   const activeSearchType = searchTypes.find((item) => item.key === searchType)?.label ?? "Web";
   const chooseSearchType = (nextType: SearchType) => {
@@ -702,20 +765,24 @@ function Performance({
             }}>Apply</button></div>
           </div>}
         </div>
-        <button className="filter-tune" title="Clear all filters" disabled={!performanceFilter} onClick={() => setPerformanceFilter(undefined)}>☷</button>
+        <button className="filter-tune" title="Filter options" disabled={!performanceFilter} onClick={() => setPerformanceFilter(undefined)}>☷</button>
+        {performanceFilter && <button className="reset-filters" onClick={() => setPerformanceFilter(undefined)}>Reset filters</button>}
         <span className="last-update">Final data through 3 days ago</span>
       </div>
       <div className="performance-content">
-        {loading ? <LoadingCard /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
+        {loading ? <Skeleton variant="performance" /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
           <>
             <section className="card report-card">
               <div className="metric-cards">
-                <button className={"metric clicks" + (visibleMetrics.includes("clicks") ? " selected" : "")} onClick={() => toggleMetric("clicks")}><span>{visibleMetrics.includes("clicks") ? "☑" : "□"} Total clicks</span><strong>{formatCompact(data.summary.clicks)}</strong></button>
-                <button className={"metric impressions" + (visibleMetrics.includes("impressions") ? " selected" : "")} onClick={() => toggleMetric("impressions")}><span>{visibleMetrics.includes("impressions") ? "☑" : "□"} Total impressions</span><strong>{formatCompact(data.summary.impressions)}</strong></button>
-                <button className={"metric ctr" + (visibleMetrics.includes("ctr") ? " selected" : "")} onClick={() => toggleMetric("ctr")}><span>{visibleMetrics.includes("ctr") ? "☑" : "□"} Average CTR</span><strong>{(data.summary.ctr * 100).toFixed(1)}%</strong></button>
-                <button className={"metric position" + (visibleMetrics.includes("position") ? " selected" : "")} onClick={() => toggleMetric("position")}><span>{visibleMetrics.includes("position") ? "☑" : "□"} Average position</span><strong>{data.summary.position.toFixed(1)}</strong></button>
+                <button className={"metric clicks" + (visibleMetrics.includes("clicks") ? " selected" : "")} onClick={() => toggleMetric("clicks")}><span>{visibleMetrics.includes("clicks") ? "☑" : "□"} Total clicks</span><strong>{formatCompact(data.summary.clicks)}</strong><b title="Clicks from Google Search">?</b></button>
+                <button className={"metric impressions" + (visibleMetrics.includes("impressions") ? " selected" : "")} onClick={() => toggleMetric("impressions")}><span>{visibleMetrics.includes("impressions") ? "☑" : "□"} Total impressions</span><strong>{formatCompact(data.summary.impressions)}</strong><b title="Times your site appeared in search">?</b></button>
+                <button className={"metric ctr" + (visibleMetrics.includes("ctr") ? " selected" : "")} onClick={() => toggleMetric("ctr")}><span>{visibleMetrics.includes("ctr") ? "☑" : "□"} Average CTR</span><strong>{(data.summary.ctr * 100).toFixed(1)}%</strong><b title="Clicks divided by impressions">?</b></button>
+                <button className={"metric position" + (visibleMetrics.includes("position") ? " selected" : "")} onClick={() => toggleMetric("position")}><span>{visibleMetrics.includes("position") ? "☑" : "□"} Average position</span><strong>{data.summary.position.toFixed(1)}</strong><b title="Average topmost search position">?</b></button>
               </div>
-              <div className="chart-labels"><span>Daily performance</span><span>{rangeLabel(range)}</span></div>
+              <div className="chart-labels">
+                <span>{visibleMetrics[0] ? metricLabels[visibleMetrics[0]] : "Daily performance"}</span>
+                <span>{visibleMetrics[1] ? metricLabels[visibleMetrics[1]] : rangeLabel(range)}</span>
+              </div>
               <LineChart rows={data.daily} visibleMetrics={visibleMetrics} />
             </section>
             <section className="card data-table-card">
@@ -792,7 +859,7 @@ function Sitemaps({
           <div><span>{prefix}</span><input placeholder="Enter sitemap URL" disabled /><button disabled>SUBMIT</button></div>
           <small>Submission is disabled because this app currently uses read-only access.</small>
         </section>
-        {loading ? <LoadingCard /> : error ? <ErrorCard error={error} retry={retry} /> : (
+        {loading ? <Skeleton variant="sitemaps" /> : error ? <ErrorCard error={error} retry={retry} /> : (
           <section className="card sitemap-table">
             <div className="card-heading"><h2>Submitted sitemaps</h2><span>≡</span></div>
             <table>
@@ -855,6 +922,7 @@ function App() {
   const [sitemaps, setSitemaps] = useState<Sitemap[]>([]);
   const [loadingSites, setLoadingSites] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [error, setError] = useState("");
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
@@ -928,6 +996,7 @@ function App() {
 
   const loadRecommendations = useCallback(async () => {
     if (!selectedSite) return;
+    setLoadingRecommendations(true);
     try {
       setRecommendations(await invoke<SearchRecommendation[]>("get_recommendations", {
         siteUrl: selectedSite.siteUrl,
@@ -935,6 +1004,8 @@ function App() {
       }));
     } catch {
       setRecommendations([]);
+    } finally {
+      setLoadingRecommendations(false);
     }
   }, [selectedSite]);
 
@@ -969,9 +1040,9 @@ function App() {
       <Header site={selectedSite} sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
       <Sidebar page={page} sites={sites} selected={selectedSite} onSelect={setSelectedSite} onNavigate={setPage} onAddAccount={() => setAddAccountOpen(true)} />
       <main className="main">
-        {loadingSites ? <div className="boot-loading"><LoadingCard message="Connecting to Google Search Console…" /></div> :
+        {loadingSites ? <div className="boot-loading"><Skeleton variant="boot" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
-            page === "overview" ? <Overview data={performance} recommendations={recommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
+            page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
