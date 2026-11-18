@@ -195,7 +195,11 @@ button { color: inherit; }
 .filter-tune { width: 40px; height: 40px; border: 0; border-radius: 10px; background: #0b57d0; color: white; font-size: 23px; cursor: pointer; }
 .filter-tune:disabled { background: #d6d9df; color: #777; cursor: default; }
 .last-update { margin-left: auto; color: #6d7175; font-size: 14px; }
-.performance-content { width: calc(100% - clamp(20px, 3vw, 50px)); padding: 0 0 60px; }
+.performance-content {
+  width: calc(100% - clamp(24px, 7vw, 136px) - clamp(20px, 3vw, 50px));
+  margin-left: clamp(24px, 7vw, 136px);
+  padding: 0 0 60px;
+}
 .report-card { border-radius: 16px 16px 0 0; overflow: hidden; margin-top: 0; }
 .metric-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(860px, 78%); }
 .metric { min-width: 0; height: 122px; padding: 23px; border: 0; border-right: 1px solid #ddd; background: white; color: #747474; text-align: left; cursor: pointer; }
@@ -333,7 +337,7 @@ td { font-size: 13px; }
   .metric-cards { width: 100%; }
   .filter-bar { padding: 10px 18px; }
   .filter-divider, .filter-tune { display: none; }
-  .performance-content { width: calc(100% - 16px); }
+  .performance-content { width: calc(100% - clamp(24px, 7vw, 136px) - 18px); }
   .tabs button { font-size: 11px; }
   .sitemap-table th, .sitemap-table td { padding: 14px 8px; font-size: 12px; }
 }
@@ -353,6 +357,7 @@ td { font-size: 13px; }
   .avatar { width: 34px; height: 34px; margin-left: 2px; }
   .page-title { height: 56px; padding-inline: 18px; }
   .page-title::after { left: 18px; }
+  .performance-content { width: calc(100% - 34px); margin-left: 18px; }
   .page-title h1 { font-size: 18px; }
   .performance-title button { margin-right: 0; font-size: 13px; }
   .filter-bar { align-content: center; }
