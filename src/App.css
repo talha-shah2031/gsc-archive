@@ -163,7 +163,9 @@ button { color: inherit; }
 .recommendation-actions span { color: #4d5156; font-size: 18px; }
 
 .filter-bar {
-  min-height: 76px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px clamp(20px, 3vw, 52px); border-bottom: 1px solid #d3d7dc; white-space: nowrap;
+  min-height: 76px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 12px clamp(20px, 3vw, 52px) 12px clamp(24px, 7vw, 136px);
+  border-bottom: 1px solid #d3d7dc; white-space: nowrap;
 }
 .range-buttons { display: flex; }
 .filter-menu-wrap { position: relative; display: flex; }
@@ -335,7 +337,7 @@ td { font-size: 13px; }
   .top-actions .dots { display: none; }
   .overview-content, .sitemap-content { width: calc(100% - 36px); margin-block: 18px; }
   .metric-cards { width: 100%; }
-  .filter-bar { padding: 10px 18px; }
+  .filter-bar { padding: 10px 18px 10px clamp(24px, 7vw, 136px); }
   .filter-divider, .filter-tune { display: none; }
   .performance-content { width: calc(100% - clamp(24px, 7vw, 136px) - 18px); }
   .tabs button { font-size: 11px; }
@@ -357,6 +359,7 @@ td { font-size: 13px; }
   .avatar { width: 34px; height: 34px; margin-left: 2px; }
   .page-title { height: 56px; padding-inline: 18px; }
   .page-title::after { left: 18px; }
+  .filter-bar { padding-left: 18px; }
   .performance-content { width: calc(100% - 34px); margin-left: 18px; }
   .page-title h1 { font-size: 18px; }
   .performance-title button { margin-right: 0; font-size: 13px; }
