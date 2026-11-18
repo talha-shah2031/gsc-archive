@@ -412,7 +412,7 @@ function LineChart({
   visibleMetrics?: MetricKey[];
 }) {
   const width = 1100;
-  const height = overview ? 220 : 330;
+  const height = overview ? 220 : 270;
   const pad = { left: 48, right: 48, top: 18, bottom: 38 };
   const maxima: Record<MetricKey, number> = {
     clicks: Math.max(1, ...rows.map((row) => row.clicks)),
@@ -451,8 +451,10 @@ function LineChart({
         {!overview && visibleMetrics.includes("position") && <polyline points={points("position")} className="position-line" />}
         {rows.length > 0 && (
           <>
-            <text x={pad.left} y={height - 6}>{formatDate(rows[0].keys[0]).replace(/, \d{4}/, "")}</text>
-            <text x={width - pad.right} y={height - 6} textAnchor="end">{formatDate(rows[rows.length - 1]?.keys[0]).replace(/, \d{4}/, "")}</text>
+            {Array.from(new Set([0, 1, 2, 3, 4, 5].map((step) => Math.round(step * (rows.length - 1) / 5)))).map((index) => {
+              const x = pad.left + (index / Math.max(1, rows.length - 1)) * (width - pad.left - pad.right);
+              return <text key={index} x={x} y={height - 6} textAnchor={index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle"}>{formatDate(rows[index]?.keys[0]).replace(/, \d{4}/, "")}</text>;
+            })}
           </>
         )}
       </svg>
@@ -606,6 +608,7 @@ function Performance({
   dimension,
   searchType,
   performanceFilter,
+  siteUrl,
   setRange,
   setDimension,
   setSearchType,
@@ -619,6 +622,7 @@ function Performance({
   dimension: Dimension;
   searchType: SearchType;
   performanceFilter?: PerformanceFilter;
+  siteUrl: string;
   setRange: (range: Range) => void;
   setDimension: (dimension: Dimension) => void;
   setSearchType: (searchType: SearchType) => void;
@@ -632,6 +636,7 @@ function Performance({
     performanceFilter ?? { dimension: "query", operator: "contains", expression: "" },
   );
   const [visibleMetrics, setVisibleMetrics] = useState<MetricKey[]>(["clicks", "impressions"]);
+  const [granularity, setGranularity] = useState<"daily" | "weekly">("daily");
   const [tableSearchOpen, setTableSearchOpen] = useState(false);
   const [tableSearch, setTableSearch] = useState("");
   const [sort, setSort] = useState<{ key: MetricKey | "dimension"; direction: "asc" | "desc" }>({
@@ -642,7 +647,7 @@ function Performance({
   const [pageNumber, setPageNumber] = useState(1);
 
   const searchTypes: { key: SearchType; label: string }[] = [
-    { key: "web", label: "Web" },
+    { key: "web", label: "Web (text)" },
     { key: "image", label: "Image" },
     { key: "video", label: "Video" },
     { key: "news", label: "News" },
@@ -672,12 +677,34 @@ function Performance({
       return sort.direction === "asc" ? comparison : -comparison;
     });
   }, [data, tableSearch, sort]);
+  const chartRows = useMemo(() => {
+    const daily = data?.daily ?? [];
+    if (granularity === "daily") return daily;
+    const weekly: MetricRow[] = [];
+    for (let index = 0; index < daily.length; index += 7) {
+      const group = daily.slice(index, index + 7);
+      const clicks = group.reduce((sum, row) => sum + row.clicks, 0);
+      const impressions = group.reduce((sum, row) => sum + row.impressions, 0);
+      const weightedPosition = group.reduce((sum, row) => sum + row.position * row.impressions, 0);
+      weekly.push({
+        keys: [group[0]?.keys[0] ?? ""],
+        clicks,
+        impressions,
+        ctr: impressions ? clicks / impressions : 0,
+        position: impressions ? weightedPosition / impressions : 0,
+      });
+    }
+    return weekly;
+  }, [data, granularity]);
   const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
   const currentPage = Math.min(pageNumber, totalPages);
   const start = (currentPage - 1) * rowsPerPage;
   const pageRows = rows.slice(start, start + rowsPerPage);
 
   useEffect(() => setPageNumber(1), [dimension, rowsPerPage, tableSearch, data]);
+  useEffect(() => {
+    if (range < 28) setGranularity("daily");
+  }, [range]);
 
   const changeSort = (key: MetricKey | "dimension") => {
     setSort((current) => current.key === key
@@ -702,7 +729,7 @@ function Performance({
   return (
     <>
       <div className="page-title performance-title"><h1>Performance</h1><button onClick={exportCsv}>⬇　EXPORT</button></div>
-      <div className="filter-bar">
+      <div className="filter-bar performance-filter-bar">
         <div className="range-buttons">
           {([1, 7, 28, 90] as Range[]).map((days) => (
             <button key={days} className={range === days ? "selected" : ""} onClick={() => setRange(days)}>
@@ -765,14 +792,18 @@ function Performance({
             }}>Apply</button></div>
           </div>}
         </div>
-        <button className="filter-tune" title="Filter options" disabled={!performanceFilter} onClick={() => setPerformanceFilter(undefined)}>☷</button>
-        {performanceFilter && <button className="reset-filters" onClick={() => setPerformanceFilter(undefined)}>Reset filters</button>}
+        <button className="filter-tune" title="Clear filters" onClick={() => setPerformanceFilter(undefined)}>☷</button>
+        <button className="reset-filters" onClick={() => setPerformanceFilter(undefined)}>Reset filters</button>
         <span className="last-update">Final data through 3 days ago</span>
       </div>
       <div className="performance-content">
         {loading ? <Skeleton variant="performance" /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
           <>
             <section className="card report-card">
+              <select className="granularity-select" value={granularity} onChange={(event) => setGranularity(event.target.value as "daily" | "weekly")}>
+                <option value="daily">Daily</option>
+                <option value="weekly" disabled={range < 28}>Weekly</option>
+              </select>
               <div className="metric-cards">
                 <button className={"metric clicks" + (visibleMetrics.includes("clicks") ? " selected" : "")} onClick={() => toggleMetric("clicks")}><span>{visibleMetrics.includes("clicks") ? "☑" : "□"} Total clicks</span><strong>{formatCompact(data.summary.clicks)}</strong><b title="Clicks from Google Search">?</b></button>
                 <button className={"metric impressions" + (visibleMetrics.includes("impressions") ? " selected" : "")} onClick={() => toggleMetric("impressions")}><span>{visibleMetrics.includes("impressions") ? "☑" : "□"} Total impressions</span><strong>{formatCompact(data.summary.impressions)}</strong><b title="Times your site appeared in search">?</b></button>
@@ -783,7 +814,12 @@ function Performance({
                 <span>{visibleMetrics[0] ? metricLabels[visibleMetrics[0]] : "Daily performance"}</span>
                 <span>{visibleMetrics[1] ? metricLabels[visibleMetrics[1]] : rangeLabel(range)}</span>
               </div>
-              <LineChart rows={data.daily} visibleMetrics={visibleMetrics} />
+              <LineChart rows={chartRows} visibleMetrics={visibleMetrics} />
+              <div className="performance-info">
+                <span className="info-icon">i</span>
+                <span>Get more details on your site's performance in generative AI features on Google Search</span>
+                <button onClick={() => window.open(`https://search.google.com/search-console/performance/search-appearance?resource_id=${encodeURIComponent(siteUrl)}`, "_blank", "noopener,noreferrer")}>Open report　›</button>
+              </div>
             </section>
             <section className="card data-table-card">
               <div className="tabs">
@@ -1043,7 +1079,7 @@ function App() {
         {loadingSites ? <div className="boot-loading"><Skeleton variant="boot" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
             page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
-              page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
+              page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}
