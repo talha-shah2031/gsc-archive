@@ -427,96 +427,6 @@ function LineChart({ rows, overview = false }: { rows: MetricRow[]; overview?: b
   );
 }
 
-function sitemapCount(value?: string) {
-  const parsed = Number.parseInt(value ?? "0", 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function IndexingCard({ sitemaps, openReport }: { sitemaps: Sitemap[]; openReport: () => void }) {
-  const indexed = sitemaps.reduce(
-    (total, sitemap) => total + sitemap.contents.reduce((sum, content) => sum + sitemapCount(content.indexed), 0),
-    0,
-  );
-  const submitted = sitemaps.reduce(
-    (total, sitemap) => total + sitemap.contents.reduce((sum, content) => sum + sitemapCount(content.submitted), 0),
-    0,
-  );
-  const notIndexed = Math.max(0, submitted - indexed);
-  const timeline = [...sitemaps]
-    .sort((a, b) => (a.lastSubmitted ?? "").localeCompare(b.lastSubmitted ?? ""))
-    .reduce<{ date: string; indexed: number; notIndexed: number }[]>((points, sitemap) => {
-      const previous = points[points.length - 1] ?? { indexed: 0, notIndexed: 0 };
-      const sitemapIndexed = sitemap.contents.reduce((sum, content) => sum + sitemapCount(content.indexed), 0);
-      const sitemapSubmitted = sitemap.contents.reduce((sum, content) => sum + sitemapCount(content.submitted), 0);
-      points.push({
-        date: sitemap.lastSubmitted ?? "",
-        indexed: previous.indexed + sitemapIndexed,
-        notIndexed: previous.notIndexed + Math.max(0, sitemapSubmitted - sitemapIndexed),
-      });
-      return points;
-    }, []);
-
-  const width = 1100;
-  const height = 245;
-  const pad = { left: 48, right: 24, top: 18, bottom: 38 };
-  const max = Math.max(1, indexed, notIndexed);
-  const graphWidth = width - pad.left - pad.right;
-  const graphHeight = height - pad.top - pad.bottom;
-  const points = (key: "indexed" | "notIndexed") => {
-    if (timeline.length === 1) {
-      const y = pad.top + (1 - timeline[0][key] / max) * graphHeight;
-      return `${pad.left},${y} ${width - pad.right},${y}`;
-    }
-    return timeline.map((point, index) => {
-      const x = pad.left + (index / Math.max(1, timeline.length - 1)) * graphWidth;
-      const y = pad.top + (1 - point[key] / max) * graphHeight;
-      return `${x},${y}`;
-    }).join(" ");
-  };
-  const ticks = [1, 0.66, 0.33, 0];
-
-  return (
-    <section className="card indexing-card">
-      <div className="card-heading">
-        <h2>Indexing</h2>
-        <button onClick={openReport}>Full report　›</button>
-      </div>
-      <div className="indexing-legend">
-        <span><i className="not-indexed-key" />{formatCompact(notIndexed)} not indexed pages</span>
-        <span><i className="indexed-key" />{formatCompact(indexed)} indexed pages</span>
-      </div>
-      {timeline.length > 0 ? (
-        <div className="indexing-chart">
-          <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Sitemap indexing totals">
-            {ticks.map((tick) => {
-              const y = pad.top + tick * graphHeight;
-              const value = Math.round((1 - tick) * max);
-              return (
-                <g key={tick}>
-                  <line x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />
-                  <text x={pad.left - 10} y={y + 4} textAnchor="end">{formatCompact(value)}</text>
-                </g>
-              );
-            })}
-            <polyline points={points("notIndexed")} className="not-indexed-line" />
-            <polyline points={points("indexed")} className="indexed-line" />
-            <circle cx={width - pad.right} cy={pad.top + (1 - notIndexed / max) * graphHeight} r="4" className="not-indexed-dot" />
-            <circle cx={width - pad.right} cy={pad.top + (1 - indexed / max) * graphHeight} r="4" className="indexed-dot" />
-            <text x={pad.left} y={height - 7}>
-              {formatDate(timeline[0].date).replace(/, \d{4}/, "")}
-            </text>
-            <text x={width - pad.right} y={height - 7} textAnchor="end">
-              {formatDate(timeline[timeline.length - 1]?.date).replace(/, \d{4}/, "")}
-            </text>
-          </svg>
-        </div>
-      ) : (
-        <div className="indexing-empty">Submit a sitemap to see indexing coverage.</div>
-      )}
-    </section>
-  );
-}
-
 function LoadingCard({ message = "Loading Search Console data…" }: { message?: string }) {
   return <div className="loading-card"><span className="spinner" />{message}</div>;
 }
@@ -538,8 +448,6 @@ function Overview({
   error,
   retry,
   openPerformance,
-  sitemaps,
-  openIndexing,
 }: {
   data?: PerformanceData;
   recommendations: SearchRecommendation[];
@@ -547,8 +455,6 @@ function Overview({
   error: string;
   retry: () => void;
   openPerformance: () => void;
-  sitemaps: Sitemap[];
-  openIndexing: () => void;
 }) {
   return (
     <>
@@ -565,7 +471,6 @@ function Overview({
             <LineChart rows={data.daily} overview />
           </section>
         )}
-        {!loading && !error && data && <IndexingCard sitemaps={sitemaps} openReport={openIndexing} />}
         {!loading && !error && recommendations.length > 0 && (
           <section className="recommendations">
             <div className="recommendations-heading">
@@ -851,15 +756,6 @@ function App() {
     }
   }, [selectedSite]);
 
-  const loadOverviewIndexing = useCallback(async () => {
-    if (!selectedSite) return;
-    try {
-      setSitemaps(await invoke<Sitemap[]>("list_sitemaps", { siteUrl: selectedSite.siteUrl }));
-    } catch {
-      setSitemaps([]);
-    }
-  }, [selectedSite]);
-
   const loadRecommendations = useCallback(async () => {
     if (!selectedSite) return;
     try {
@@ -878,12 +774,9 @@ function App() {
     if (page === "sitemaps") void loadSitemaps();
     else {
       void loadPerformance();
-      if (page === "overview") {
-        void loadRecommendations();
-        void loadOverviewIndexing();
-      }
+      if (page === "overview") void loadRecommendations();
     }
-  }, [page, selectedSite, loadPerformance, loadSitemaps, loadRecommendations, loadOverviewIndexing]);
+  }, [page, selectedSite, loadPerformance, loadSitemaps, loadRecommendations]);
 
   const retry = page === "sitemaps" ? loadSitemaps : selectedSite ? loadPerformance : loadSites;
   const shellClass = "app-shell" + (sidebarOpen ? "" : " sidebar-collapsed");
@@ -908,7 +801,7 @@ function App() {
       <main className="main">
         {loadingSites ? <div className="boot-loading"><LoadingCard message="Connecting to Google Search Console…" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
-            page === "overview" ? <Overview data={performance} recommendations={recommendations} sitemaps={sitemaps} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} openIndexing={() => setPage("sitemaps")} /> :
+            page === "overview" ? <Overview data={performance} recommendations={recommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} setRange={setRange} setDimension={setDimension} retry={retry} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
