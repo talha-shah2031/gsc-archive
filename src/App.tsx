@@ -634,6 +634,7 @@ function Performance({
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterEditorOpen, setFilterEditorOpen] = useState(false);
   const addFilterRef = useRef<HTMLDivElement>(null);
+  const searchTypeRef = useRef<HTMLDivElement>(null);
   const [draftFilter, setDraftFilter] = useState<PerformanceFilter>(
     performanceFilter ?? { dimension: "query", operator: "contains", expression: "" },
   );
@@ -748,6 +749,21 @@ function Performance({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [filterOpen]);
+  useEffect(() => {
+    if (!searchTypeOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!searchTypeRef.current?.contains(event.target as Node)) setSearchTypeOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSearchTypeOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [searchTypeOpen]);
 
   const changeSort = (key: MetricKey | "dimension") => {
     setSort((current) => current.key === key
@@ -791,7 +807,7 @@ function Performance({
           </div>
         </div>
         <span className="filter-divider" />
-        <div className="filter-menu-wrap">
+        <div className="filter-menu-wrap" ref={searchTypeRef}>
           <button className="filter-chip" onClick={() => setSearchTypeOpen((open) => !open)}>Search type: {activeSearchType}　<AppIcon name="chevron" className="caret-down" /></button>
           {searchTypeOpen && <div className="filter-menu search-type-menu">
             {searchTypes.map((item) => (
@@ -855,7 +871,6 @@ function Performance({
             <div className="filter-panel-actions"><button onClick={closeFilter}>Cancel</button><button disabled={!draftFilter.expression.trim()} onClick={applyFilter}>Apply</button></div>
           </div>}
         </div>
-        <button className="filter-tune" title="Clear filters" onClick={() => setPerformanceFilter(undefined)}>☷</button>
         <button className="reset-filters" onClick={() => setPerformanceFilter(undefined)}>Reset filters</button>
         <span className="last-update">Final data through 3 days ago</span>
       </div>
