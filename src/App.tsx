@@ -6,7 +6,15 @@ import "./App.css";
 
 type Page = "overview" | "performance" | "sitemaps";
 type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | "date";
-type Range = 1 | 7 | 28 | 90;
+type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
+type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
+type MetricKey = "clicks" | "impressions" | "ctr" | "position";
+
+interface PerformanceFilter {
+  dimension: Exclude<Dimension, "date">;
+  operator: "contains" | "equals";
+  expression: string;
+}
 
 interface Site {
   siteUrl: string;
@@ -394,16 +402,28 @@ function AddAccountModal({
   );
 }
 
-function LineChart({ rows, overview = false }: { rows: MetricRow[]; overview?: boolean }) {
+function LineChart({
+  rows,
+  overview = false,
+  visibleMetrics = ["clicks", "impressions"],
+}: {
+  rows: MetricRow[];
+  overview?: boolean;
+  visibleMetrics?: MetricKey[];
+}) {
   const width = 1100;
   const height = overview ? 220 : 280;
   const pad = { left: 42, right: 42, top: 18, bottom: 34 };
-  const maxClicks = Math.max(1, ...rows.map((row) => row.clicks));
-  const maxImpressions = Math.max(1, ...rows.map((row) => row.impressions));
-  const points = (key: "clicks" | "impressions", max: number) =>
+  const maxima: Record<MetricKey, number> = {
+    clicks: Math.max(1, ...rows.map((row) => row.clicks)),
+    impressions: Math.max(1, ...rows.map((row) => row.impressions)),
+    ctr: Math.max(0.01, ...rows.map((row) => row.ctr)),
+    position: Math.max(1, ...rows.map((row) => row.position)),
+  };
+  const points = (key: MetricKey) =>
     rows.map((row, index) => {
       const x = pad.left + (index / Math.max(1, rows.length - 1)) * (width - pad.left - pad.right);
-      const y = pad.top + (1 - row[key] / max) * (height - pad.top - pad.bottom);
+      const y = pad.top + (1 - row[key] / maxima[key]) * (height - pad.top - pad.bottom);
       return `${x},${y}`;
     }).join(" ");
   const ticks = [0, 0.33, 0.66, 1];
@@ -414,8 +434,10 @@ function LineChart({ rows, overview = false }: { rows: MetricRow[]; overview?: b
           const y = pad.top + tick * (height - pad.top - pad.bottom);
           return <line key={tick} x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />;
         })}
-        <polyline points={points("clicks", maxClicks)} className="click-line" />
-        {!overview && <polyline points={points("impressions", maxImpressions)} className="impression-line" />}
+        {visibleMetrics.includes("clicks") && <polyline points={points("clicks")} className="click-line" />}
+        {!overview && visibleMetrics.includes("impressions") && <polyline points={points("impressions")} className="impression-line" />}
+        {!overview && visibleMetrics.includes("ctr") && <polyline points={points("ctr")} className="ctr-line" />}
+        {!overview && visibleMetrics.includes("position") && <polyline points={points("position")} className="position-line" />}
         {rows.length > 0 && (
           <>
             <text x={pad.left} y={height - 6}>{formatDate(rows[0].keys[0]).replace(/, \d{4}/, "")}</text>
@@ -520,8 +542,12 @@ function Performance({
   error,
   range,
   dimension,
+  searchType,
+  performanceFilter,
   setRange,
   setDimension,
+  setSearchType,
+  setPerformanceFilter,
   retry,
 }: {
   data?: PerformanceData;
@@ -529,18 +555,84 @@ function Performance({
   error: string;
   range: Range;
   dimension: Dimension;
+  searchType: SearchType;
+  performanceFilter?: PerformanceFilter;
   setRange: (range: Range) => void;
   setDimension: (dimension: Dimension) => void;
+  setSearchType: (searchType: SearchType) => void;
+  setPerformanceFilter: (filter?: PerformanceFilter) => void;
   retry: () => void;
 }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [searchTypeOpen, setSearchTypeOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [draftFilter, setDraftFilter] = useState<PerformanceFilter>(
+    performanceFilter ?? { dimension: "query", operator: "contains", expression: "" },
+  );
+  const [visibleMetrics, setVisibleMetrics] = useState<MetricKey[]>(["clicks", "impressions"]);
+  const [tableSearchOpen, setTableSearchOpen] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+  const [sort, setSort] = useState<{ key: MetricKey | "dimension"; direction: "asc" | "desc" }>({
+    key: "clicks",
+    direction: "desc",
+  });
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [pageNumber, setPageNumber] = useState(1);
+
+  const searchTypes: { key: SearchType; label: string }[] = [
+    { key: "web", label: "Web" },
+    { key: "image", label: "Image" },
+    { key: "video", label: "Video" },
+    { key: "news", label: "News" },
+    { key: "discover", label: "Discover" },
+    { key: "googleNews", label: "Google News" },
+  ];
+  const rangeLabel = (days: Range) => days === 1 ? "1 day" : days === 90 ? "3 months" : days === 180 ? "6 months" : days === 365 ? "12 months" : days === 480 ? "16 months" : `${days} days`;
+  const activeSearchType = searchTypes.find((item) => item.key === searchType)?.label ?? "Web";
+  const chooseSearchType = (nextType: SearchType) => {
+    setSearchType(nextType);
+    if (nextType === "discover" || nextType === "googleNews") {
+      if (dimension === "query") setDimension("page");
+      if (performanceFilter?.dimension === "query") setPerformanceFilter(undefined);
+      if (draftFilter.dimension === "query") setDraftFilter({ ...draftFilter, dimension: "page" });
+    }
+    setSearchTypeOpen(false);
+  };
+
+  const rows = useMemo(() => {
+    const query = tableSearch.trim().toLowerCase();
+    const filtered = (data?.rows ?? []).filter((row) => !query || (row.keys[0] ?? "").toLowerCase().includes(query));
+    return [...filtered].sort((a, b) => {
+      const left = sort.key === "dimension" ? (a.keys[0] ?? "") : a[sort.key];
+      const right = sort.key === "dimension" ? (b.keys[0] ?? "") : b[sort.key];
+      const comparison = typeof left === "string" ? left.localeCompare(String(right)) : left - Number(right);
+      return sort.direction === "asc" ? comparison : -comparison;
+    });
+  }, [data, tableSearch, sort]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
+  const currentPage = Math.min(pageNumber, totalPages);
+  const start = (currentPage - 1) * rowsPerPage;
+  const pageRows = rows.slice(start, start + rowsPerPage);
+
+  useEffect(() => setPageNumber(1), [dimension, rowsPerPage, tableSearch, data]);
+
+  const changeSort = (key: MetricKey | "dimension") => {
+    setSort((current) => current.key === key
+      ? { key, direction: current.direction === "desc" ? "asc" : "desc" }
+      : { key, direction: key === "dimension" ? "asc" : "desc" });
+  };
+  const sortMark = (key: MetricKey | "dimension") => sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "";
+  const toggleMetric = (key: MetricKey) => {
+    setVisibleMetrics((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  };
   const exportCsv = () => {
     if (!data) return;
     const header = ["Dimension", "Clicks", "Impressions", "CTR", "Position"];
-    const body = data.rows.map((row) => [row.keys[0], row.clicks, row.impressions, row.ctr, row.position]);
+    const body = rows.map((row) => [row.keys[0], row.clicks, row.impressions, row.ctr, row.position]);
     const csv = [header, ...body].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    link.download = "search-console-performance.csv";
+    link.download = `search-console-${dimension}-${searchType}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -551,15 +643,66 @@ function Performance({
         <div className="range-buttons">
           {([1, 7, 28, 90] as Range[]).map((days) => (
             <button key={days} className={range === days ? "selected" : ""} onClick={() => setRange(days)}>
-              {range === days && "✓　"}{days === 1 ? "24 hours" : days === 90 ? "3 months" : `${days} days`}
+              {range === days && "✓　"}{rangeLabel(days)}
             </button>
           ))}
-          <button>More　<AppIcon name="chevron" className="caret-down" /></button>
+          <div className="filter-menu-wrap">
+            <button className={range > 90 ? "selected" : ""} onClick={() => setMoreOpen((open) => !open)}>
+              {range > 90 && "✓　"}{range > 90 ? rangeLabel(range) : "More"}　<AppIcon name="chevron" className="caret-down" />
+            </button>
+            {moreOpen && <div className="filter-menu range-menu">
+              {([180, 365, 480] as Range[]).map((days) => (
+                <button key={days} onClick={() => { setRange(days); setMoreOpen(false); }}>{rangeLabel(days)}</button>
+              ))}
+            </div>}
+          </div>
         </div>
         <span className="filter-divider" />
-        <button className="filter-chip">Search type: Web (text)　<AppIcon name="chevron" className="caret-down" /></button>
-        <button className="filter-chip">＋　Add filter</button>
-        <button className="filter-tune">☷</button>
+        <div className="filter-menu-wrap">
+          <button className="filter-chip" onClick={() => setSearchTypeOpen((open) => !open)}>Search type: {activeSearchType}　<AppIcon name="chevron" className="caret-down" /></button>
+          {searchTypeOpen && <div className="filter-menu search-type-menu">
+            {searchTypes.map((item) => (
+              <button key={item.key} className={searchType === item.key ? "active" : ""} onClick={() => chooseSearchType(item.key)}>
+                <span>{searchType === item.key ? "✓" : ""}</span>{item.label}
+              </button>
+            ))}
+          </div>}
+        </div>
+        {performanceFilter && (
+          <button className="filter-chip active-filter" onClick={() => setFilterOpen(true)}>
+            {performanceFilter.dimension}: {performanceFilter.expression}
+            <span onClick={(event) => { event.stopPropagation(); setPerformanceFilter(undefined); }}>×</span>
+          </button>
+        )}
+        <div className="filter-menu-wrap">
+          <button className="filter-chip" onClick={() => setFilterOpen((open) => !open)}>＋　Add filter</button>
+          {filterOpen && <div className="filter-panel">
+            <label>Filter by
+              <select value={draftFilter.dimension} onChange={(event) => setDraftFilter({ ...draftFilter, dimension: event.target.value as PerformanceFilter["dimension"] })}>
+                {dimensions.filter((item) => item.key !== "date" && !((searchType === "discover" || searchType === "googleNews") && item.key === "query")).map((item) => <option key={item.key} value={item.key}>{item.column}</option>)}
+              </select>
+            </label>
+            <label>Match
+              <select value={draftFilter.operator} onChange={(event) => setDraftFilter({ ...draftFilter, operator: event.target.value as PerformanceFilter["operator"] })}>
+                <option value="contains">Contains</option>
+                <option value="equals">Exactly matches</option>
+              </select>
+            </label>
+            <label>Value
+              <input autoFocus value={draftFilter.expression} onChange={(event) => setDraftFilter({ ...draftFilter, expression: event.target.value })} onKeyDown={(event) => {
+                if (event.key === "Enter" && draftFilter.expression.trim()) {
+                  setPerformanceFilter({ ...draftFilter, expression: draftFilter.expression.trim() });
+                  setFilterOpen(false);
+                }
+              }} />
+            </label>
+            <div><button onClick={() => setFilterOpen(false)}>Cancel</button><button disabled={!draftFilter.expression.trim()} onClick={() => {
+              setPerformanceFilter({ ...draftFilter, expression: draftFilter.expression.trim() });
+              setFilterOpen(false);
+            }}>Apply</button></div>
+          </div>}
+        </div>
+        <button className="filter-tune" title="Clear all filters" disabled={!performanceFilter} onClick={() => setPerformanceFilter(undefined)}>☷</button>
         <span className="last-update">Final data through 3 days ago</span>
       </div>
       <div className="performance-content">
@@ -567,24 +710,36 @@ function Performance({
           <>
             <section className="card report-card">
               <div className="metric-cards">
-                <div className="metric clicks"><span>☑ Total clicks</span><strong>{formatCompact(data.summary.clicks)}</strong></div>
-                <div className="metric impressions"><span>☑ Total impressions</span><strong>{formatCompact(data.summary.impressions)}</strong></div>
-                <div className="metric"><span>□ Average CTR</span><strong>{(data.summary.ctr * 100).toFixed(1)}%</strong></div>
-                <div className="metric"><span>□ Average position</span><strong>{data.summary.position.toFixed(1)}</strong></div>
+                <button className={"metric clicks" + (visibleMetrics.includes("clicks") ? " selected" : "")} onClick={() => toggleMetric("clicks")}><span>{visibleMetrics.includes("clicks") ? "☑" : "□"} Total clicks</span><strong>{formatCompact(data.summary.clicks)}</strong></button>
+                <button className={"metric impressions" + (visibleMetrics.includes("impressions") ? " selected" : "")} onClick={() => toggleMetric("impressions")}><span>{visibleMetrics.includes("impressions") ? "☑" : "□"} Total impressions</span><strong>{formatCompact(data.summary.impressions)}</strong></button>
+                <button className={"metric ctr" + (visibleMetrics.includes("ctr") ? " selected" : "")} onClick={() => toggleMetric("ctr")}><span>{visibleMetrics.includes("ctr") ? "☑" : "□"} Average CTR</span><strong>{(data.summary.ctr * 100).toFixed(1)}%</strong></button>
+                <button className={"metric position" + (visibleMetrics.includes("position") ? " selected" : "")} onClick={() => toggleMetric("position")}><span>{visibleMetrics.includes("position") ? "☑" : "□"} Average position</span><strong>{data.summary.position.toFixed(1)}</strong></button>
               </div>
-              <div className="chart-labels"><span>Clicks</span><span>Impressions</span></div>
-              <LineChart rows={data.daily} />
+              <div className="chart-labels"><span>Daily performance</span><span>{rangeLabel(range)}</span></div>
+              <LineChart rows={data.daily} visibleMetrics={visibleMetrics} />
             </section>
-            <div className="ai-note">ⓘ　Get more details on your site's performance in generative AI features on Google Search <button>Open report　›</button></div>
             <section className="card data-table-card">
               <div className="tabs">
-                {dimensions.map((item) => <button key={item.key} className={dimension === item.key ? "active" : ""} onClick={() => setDimension(item.key)}>{item.label}</button>)}
+                {dimensions.map((item) => {
+                  const unavailable = (searchType === "discover" || searchType === "googleNews") && item.key === "query";
+                  return <button key={item.key} disabled={unavailable} title={unavailable ? `Queries aren't available for ${activeSearchType}` : ""} className={dimension === item.key ? "active" : ""} onClick={() => setDimension(item.key)}>{item.label}</button>;
+                })}
               </div>
-              <div className="table-filter">≡</div>
+              <div className="table-filter">
+                {tableSearchOpen && <input autoFocus placeholder={`Filter ${dimensions.find((item) => item.key === dimension)?.column.toLowerCase()}`} value={tableSearch} onChange={(event) => setTableSearch(event.target.value)} />}
+                {tableSearch && <button onClick={() => setTableSearch("")}>Clear</button>}
+                <button aria-label="Filter table" className={tableSearchOpen ? "active" : ""} onClick={() => setTableSearchOpen((open) => !open)}>≡</button>
+              </div>
               <table>
-                <thead><tr><th>{dimensions.find((item) => item.key === dimension)?.column}</th><th>↓　Clicks</th><th>Impressions</th><th>CTR</th><th>Position</th></tr></thead>
+                <thead><tr>
+                  <th><button onClick={() => changeSort("dimension")}>{dimensions.find((item) => item.key === dimension)?.column} {sortMark("dimension")}</button></th>
+                  <th><button onClick={() => changeSort("clicks")}>{sortMark("clicks")}　Clicks</button></th>
+                  <th><button onClick={() => changeSort("impressions")}>{sortMark("impressions")}　Impressions</button></th>
+                  <th><button onClick={() => changeSort("ctr")}>{sortMark("ctr")}　CTR</button></th>
+                  <th><button onClick={() => changeSort("position")}>{sortMark("position")}　Position</button></th>
+                </tr></thead>
                 <tbody>
-                  {data.rows.slice(0, 100).map((row, index) => (
+                  {pageRows.map((row, index) => (
                     <tr key={`${row.keys[0]}-${index}`}>
                       <td>{dimension === "date" ? formatDate(row.keys[0]) : row.keys[0]}</td>
                       <td className="blue">{formatCompact(row.clicks)}</td>
@@ -595,8 +750,17 @@ function Performance({
                   ))}
                 </tbody>
               </table>
-              {data.rows.length === 0 && <div className="empty-state">No data was returned for this period.</div>}
-              <div className="pagination">Rows per page:　10　<AppIcon name="chevron" className="caret-down" />　　 1–{Math.min(100, data.rows.length)} of {data.rows.length}　　‹　›</div>
+              {rows.length === 0 && <div className="empty-state">No data was returned for this period or table filter.</div>}
+              <div className="pagination">
+                <label>Rows per page:
+                  <select value={rowsPerPage} onChange={(event) => setRowsPerPage(Number(event.target.value))}>
+                    {[10, 25, 50, 100].map((count) => <option key={count} value={count}>{count}</option>)}
+                  </select>
+                </label>
+                <span>{rows.length ? start + 1 : 0}–{Math.min(start + rowsPerPage, rows.length)} of {rows.length}</span>
+                <button disabled={currentPage === 1} onClick={() => setPageNumber((page) => Math.max(1, page - 1))}>‹</button>
+                <button disabled={currentPage === totalPages} onClick={() => setPageNumber((page) => Math.min(totalPages, page + 1))}>›</button>
+              </div>
             </section>
           </>
         )}
@@ -684,6 +848,8 @@ function App() {
   const [selectedSite, setSelectedSite] = useState<Site>();
   const [range, setRange] = useState<Range>(90);
   const [dimension, setDimension] = useState<Dimension>("query");
+  const [searchType, setSearchType] = useState<SearchType>("web");
+  const [performanceFilter, setPerformanceFilter] = useState<PerformanceFilter>();
   const [performance, setPerformance] = useState<PerformanceData>();
   const [recommendations, setRecommendations] = useState<SearchRecommendation[]>([]);
   const [sitemaps, setSitemaps] = useState<Sitemap[]>([]);
@@ -734,6 +900,10 @@ function App() {
         startDate: dates.startDate,
         endDate: dates.endDate,
         dimension,
+        searchType,
+        filterDimension: performanceFilter?.dimension,
+        filterOperator: performanceFilter?.operator,
+        filterExpression: performanceFilter?.expression,
       });
       setPerformance(result);
     } catch (reason) {
@@ -741,7 +911,7 @@ function App() {
     } finally {
       setLoadingData(false);
     }
-  }, [selectedSite, dates, dimension]);
+  }, [selectedSite, dates, dimension, searchType, performanceFilter]);
 
   const loadSitemaps = useCallback(async () => {
     if (!selectedSite) return;
@@ -802,7 +972,7 @@ function App() {
         {loadingSites ? <div className="boot-loading"><LoadingCard message="Connecting to Google Search Console…" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
             page === "overview" ? <Overview data={performance} recommendations={recommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
-              page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} setRange={setRange} setDimension={setDimension} retry={retry} /> :
+              page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}

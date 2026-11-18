@@ -503,20 +503,33 @@ async fn analytics_query(
     end_date: &str,
     dimensions: Vec<&str>,
     row_limit: u32,
+    search_type: &str,
+    filter: Option<(&str, &str, &str)>,
 ) -> Result<Vec<MetricRow>, String> {
+    let mut body = json!({
+        "startDate": start_date,
+        "endDate": end_date,
+        "dimensions": dimensions,
+        "type": search_type,
+        "dataState": "final",
+        "rowLimit": row_limit
+    });
+    if let Some((dimension, operator, expression)) = filter {
+        body["dimensionFilterGroups"] = json!([{
+            "groupType": "and",
+            "filters": [{
+                "dimension": dimension,
+                "operator": operator,
+                "expression": expression
+            }]
+        }]);
+    }
     let value = google_post(
         &format!(
             "/sites/{}/searchAnalytics/query",
             urlencoding::encode(site_url)
         ),
-        json!({
-            "startDate": start_date,
-            "endDate": end_date,
-            "dimensions": dimensions,
-            "type": "web",
-            "dataState": "final",
-            "rowLimit": row_limit
-        }),
+        body,
     )
     .await?;
     serde_json::from_value(value.get("rows").cloned().unwrap_or_else(|| json!([])))
@@ -529,20 +542,42 @@ async fn get_performance(
     start_date: String,
     end_date: String,
     dimension: String,
+    search_type: String,
+    filter_dimension: Option<String>,
+    filter_operator: Option<String>,
+    filter_expression: Option<String>,
 ) -> Result<PerformanceData, String> {
     let dimension = match dimension.as_str() {
         "page" | "country" | "device" | "searchAppearance" | "date" => dimension,
         _ => "query".to_string(),
     };
+    let search_type = match search_type.as_str() {
+        "image" | "video" | "news" | "discover" | "googleNews" => search_type,
+        _ => "web".to_string(),
+    };
+    let filter = match (
+        filter_dimension.as_deref(),
+        filter_operator.as_deref(),
+        filter_expression.as_deref(),
+    ) {
+        (
+            Some(dimension @ ("query" | "page" | "country" | "device" | "searchAppearance")),
+            Some(operator @ ("contains" | "equals")),
+            Some(expression),
+        ) if !expression.trim().is_empty() => Some((dimension, operator, expression)),
+        _ => None,
+    };
     let (summary, daily, rows) = tokio::join!(
-        analytics_query(&site_url, &start_date, &end_date, vec![], 1),
-        analytics_query(&site_url, &start_date, &end_date, vec!["date"], 5000),
+        analytics_query(&site_url, &start_date, &end_date, vec![], 1, &search_type, filter),
+        analytics_query(&site_url, &start_date, &end_date, vec!["date"], 5000, &search_type, filter),
         analytics_query(
             &site_url,
             &start_date,
             &end_date,
             vec![dimension.as_str()],
-            1000
+            25000,
+            &search_type,
+            filter
         )
     );
     Ok(PerformanceData {
@@ -566,14 +601,18 @@ async fn get_recommendations(
             &current_start,
             &current_end,
             vec!["page"],
-            5000
+            5000,
+            "web",
+            None
         ),
         analytics_query(
             &site_url,
             &previous_start,
             &previous_end,
             vec!["page"],
-            5000
+            5000,
+            "web",
+            None
         )
     );
     let current = current?;
@@ -696,6 +735,8 @@ mod tests {
             "2026-10-31",
             vec!["date"],
             10,
+            "web",
+            None,
         )
         .await
         .expect("service account could not query Search Analytics");
