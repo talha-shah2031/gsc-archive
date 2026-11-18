@@ -142,6 +142,21 @@ button { color: inherit; }
 .overview-performance { padding: 29px 28px 18px; }
 .chart-legend { display: flex; align-items: center; gap: 8px; margin: 32px 0 10px; }
 .chart-legend i { width: 15px; height: 5px; background: var(--blue); border-radius: 4px; }
+.indexing-card { margin-top: 28px; padding: 29px 28px 20px; }
+.indexing-legend { display: flex; align-items: center; gap: 54px; margin: 31px 0 12px; font-size: 14px; color: #202124; }
+.indexing-legend span { display: flex; align-items: center; gap: 9px; }
+.indexing-legend i { width: 15px; height: 5px; border-radius: 4px; }
+.not-indexed-key { background: #a7a7a7; }
+.indexed-key { background: #07883f; }
+.indexing-chart { width: 100%; }
+.indexing-chart svg { width: 100%; display: block; overflow: visible; }
+.indexing-chart text { fill: #6b6f74; font-size: 12px; }
+.indexed-line, .not-indexed-line { fill: none; stroke-width: 2.3; stroke-linejoin: round; stroke-linecap: round; }
+.indexed-line { stroke: #07883f; }
+.not-indexed-line { stroke: #b7b7b7; }
+.indexed-dot { fill: #07883f; }
+.not-indexed-dot { fill: #b7b7b7; }
+.indexing-empty { min-height: 170px; display: grid; place-items: center; color: #6b6f74; font-size: 14px; }
 .recommendations { margin-top: 28px; padding: 25px 28px 30px; border-radius: 16px; background: #e8eef7; }
 .recommendations-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .recommendations h2 { font: 400 21px "Google Sans", Arial; margin: 0; }
