@@ -632,6 +632,8 @@ function Performance({
   const [moreOpen, setMoreOpen] = useState(false);
   const [searchTypeOpen, setSearchTypeOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [filterEditorOpen, setFilterEditorOpen] = useState(false);
+  const addFilterRef = useRef<HTMLDivElement>(null);
   const [draftFilter, setDraftFilter] = useState<PerformanceFilter>(
     performanceFilter ?? { dimension: "query", operator: "contains", expression: "" },
   );
@@ -657,6 +659,32 @@ function Performance({
   const metricLabels: Record<MetricKey, string> = { clicks: "Clicks", impressions: "Impressions", ctr: "CTR", position: "Position" };
   const rangeLabel = (days: Range) => days === 1 ? "1 day" : days === 90 ? "3 months" : days === 180 ? "6 months" : days === 365 ? "12 months" : days === 480 ? "16 months" : `${days} days`;
   const activeSearchType = searchTypes.find((item) => item.key === searchType)?.label ?? "Web";
+  const filterLabels: Record<PerformanceFilter["dimension"], string> = {
+    query: "Query",
+    page: "Page",
+    country: "Country",
+    device: "Device",
+    searchAppearance: "Search appearance",
+  };
+  const availableFilterDimensions = (Object.keys(filterLabels) as PerformanceFilter["dimension"][])
+    .filter((item) => !((searchType === "discover" || searchType === "googleNews") && item === "query"));
+  const chooseFilterDimension = (filterDimension: PerformanceFilter["dimension"]) => {
+    setDraftFilter({
+      dimension: filterDimension,
+      operator: filterDimension === "device" || filterDimension === "country" || filterDimension === "searchAppearance" ? "equals" : "contains",
+      expression: filterDimension === "device" ? "DESKTOP" : "",
+    });
+    setFilterEditorOpen(true);
+  };
+  const closeFilter = () => {
+    setFilterOpen(false);
+    setFilterEditorOpen(false);
+  };
+  const applyFilter = () => {
+    if (!draftFilter.expression.trim()) return;
+    setPerformanceFilter({ ...draftFilter, expression: draftFilter.expression.trim() });
+    closeFilter();
+  };
   const chooseSearchType = (nextType: SearchType) => {
     setSearchType(nextType);
     if (nextType === "discover" || nextType === "googleNews") {
@@ -705,6 +733,21 @@ function Performance({
   useEffect(() => {
     if (range < 28) setGranularity("daily");
   }, [range]);
+  useEffect(() => {
+    if (!filterOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!addFilterRef.current?.contains(event.target as Node)) closeFilter();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeFilter();
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [filterOpen]);
 
   const changeSort = (key: MetricKey | "dimension") => {
     setSort((current) => current.key === key
@@ -759,37 +802,57 @@ function Performance({
           </div>}
         </div>
         {performanceFilter && (
-          <button className="filter-chip active-filter" onClick={() => setFilterOpen(true)}>
+          <button className="filter-chip active-filter" onClick={() => {
+            setDraftFilter(performanceFilter);
+            setFilterOpen(true);
+            setFilterEditorOpen(true);
+          }}>
             {performanceFilter.dimension}: {performanceFilter.expression}
             <span onClick={(event) => { event.stopPropagation(); setPerformanceFilter(undefined); }}>×</span>
           </button>
         )}
-        <div className="filter-menu-wrap">
-          <button className="filter-chip" onClick={() => setFilterOpen((open) => !open)}>＋　Add filter</button>
-          {filterOpen && <div className="filter-panel">
-            <label>Filter by
-              <select value={draftFilter.dimension} onChange={(event) => setDraftFilter({ ...draftFilter, dimension: event.target.value as PerformanceFilter["dimension"] })}>
-                {dimensions.filter((item) => item.key !== "date" && !((searchType === "discover" || searchType === "googleNews") && item.key === "query")).map((item) => <option key={item.key} value={item.key}>{item.column}</option>)}
-              </select>
-            </label>
-            <label>Match
+        <div className="filter-menu-wrap" ref={addFilterRef}>
+          <button className="filter-chip" onClick={() => {
+            if (filterOpen) closeFilter();
+            else {
+              setFilterOpen(true);
+              setFilterEditorOpen(false);
+            }
+          }}>＋　Add filter</button>
+          {filterOpen && !filterEditorOpen && (
+            <div className="filter-menu add-filter-menu">
+              {availableFilterDimensions.map((item) => <button key={item} onClick={() => chooseFilterDimension(item)}>{filterLabels[item]}</button>)}
+            </div>
+          )}
+          {filterOpen && filterEditorOpen && <div className="filter-panel">
+            <div className="filter-panel-title">
+              <button onClick={() => setFilterEditorOpen(false)} aria-label="Back to filter types">‹</button>
+              <b>Filter by {filterLabels[draftFilter.dimension]}</b>
+            </div>
+            {draftFilter.dimension !== "device" && <label>Match
               <select value={draftFilter.operator} onChange={(event) => setDraftFilter({ ...draftFilter, operator: event.target.value as PerformanceFilter["operator"] })}>
                 <option value="contains">Contains</option>
                 <option value="equals">Exactly matches</option>
               </select>
+            </label>}
+            <label>{draftFilter.dimension === "device" ? "Device type" : filterLabels[draftFilter.dimension]}
+              {draftFilter.dimension === "device" ? (
+                <select autoFocus value={draftFilter.expression} onChange={(event) => setDraftFilter({ ...draftFilter, expression: event.target.value })}>
+                  <option value="DESKTOP">Desktop</option>
+                  <option value="MOBILE">Mobile</option>
+                  <option value="TABLET">Tablet</option>
+                </select>
+              ) : (
+                <input
+                  autoFocus
+                  placeholder={draftFilter.dimension === "page" ? "https://example.com/page" : draftFilter.dimension === "country" ? "3-letter country code, e.g. USA" : `Enter ${filterLabels[draftFilter.dimension].toLowerCase()}`}
+                  value={draftFilter.expression}
+                  onChange={(event) => setDraftFilter({ ...draftFilter, expression: event.target.value })}
+                  onKeyDown={(event) => { if (event.key === "Enter") applyFilter(); }}
+                />
+              )}
             </label>
-            <label>Value
-              <input autoFocus value={draftFilter.expression} onChange={(event) => setDraftFilter({ ...draftFilter, expression: event.target.value })} onKeyDown={(event) => {
-                if (event.key === "Enter" && draftFilter.expression.trim()) {
-                  setPerformanceFilter({ ...draftFilter, expression: draftFilter.expression.trim() });
-                  setFilterOpen(false);
-                }
-              }} />
-            </label>
-            <div><button onClick={() => setFilterOpen(false)}>Cancel</button><button disabled={!draftFilter.expression.trim()} onClick={() => {
-              setPerformanceFilter({ ...draftFilter, expression: draftFilter.expression.trim() });
-              setFilterOpen(false);
-            }}>Apply</button></div>
+            <div className="filter-panel-actions"><button onClick={closeFilter}>Cancel</button><button disabled={!draftFilter.expression.trim()} onClick={applyFilter}>Apply</button></div>
           </div>}
         </div>
         <button className="filter-tune" title="Clear filters" onClick={() => setPerformanceFilter(undefined)}>☷</button>
