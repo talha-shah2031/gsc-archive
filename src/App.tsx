@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
 import "./App.css";
 
-type Page = "overview" | "performance" | "sitemaps";
+type Page = "overview" | "performance" | "sitemaps" | "vitals";
 type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | "date";
 type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
@@ -66,6 +66,61 @@ interface Sitemap {
   warnings?: string;
   errors?: string;
   contents: SitemapContent[];
+}
+
+interface LighthouseCategory {
+  id: string;
+  title: string;
+  score?: number | null;
+  auditRefs: string[];
+}
+
+interface LighthouseDetailHeading {
+  key?: string;
+  label?: string;
+  valueType?: string;
+}
+
+interface LighthouseAuditDetails {
+  type?: string;
+  headings: LighthouseDetailHeading[];
+  items: Record<string, unknown>[];
+}
+
+interface LighthouseAudit {
+  id: string;
+  title: string;
+  description: string;
+  score?: number | null;
+  scoreDisplayMode: string;
+  displayValue?: string | null;
+  numericValue?: number | null;
+  numericUnit?: string | null;
+  category?: string | null;
+  savingsMs?: number | null;
+  savingsBytes?: number | null;
+  details?: LighthouseAuditDetails | null;
+}
+
+interface PassedAudit {
+  id: string;
+  title: string;
+  category?: string | null;
+}
+
+interface LighthouseReport {
+  requestedUrl: string;
+  finalUrl: string;
+  fetchTime: string;
+  lighthouseVersion: string;
+  strategy: string;
+  formFactor?: string | null;
+  durationMs: number;
+  categories: LighthouseCategory[];
+  metrics: LighthouseAudit[];
+  audits: LighthouseAudit[];
+  passed: PassedAudit[];
+  warnings: string[];
 }
 
 const navGroups = [
@@ -224,7 +279,7 @@ function Sidebar({
   onAddAccount: () => void;
 }) {
   const navigate = (key: string) => {
-    if (key === "overview" || key === "performance" || key === "sitemaps") onNavigate(key);
+    if (key === "overview" || key === "performance" || key === "sitemaps" || key === "vitals") onNavigate(key);
   };
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -304,7 +359,7 @@ function Sidebar({
             {group.items.map(([key, icon, label]) => (
               <button
                 key={key}
-                className={(page === key ? "active " : "") + (!["overview", "performance", "sitemaps"].includes(key) ? "disabled" : "")}
+                className={(page === key ? "active " : "") + (!["overview", "performance", "sitemaps", "vitals"].includes(key) ? "disabled" : "")}
                 onClick={() => navigate(key)}
               >
                 <span className="nav-icon">
@@ -462,7 +517,23 @@ function LineChart({
   );
 }
 
-function Skeleton({ variant }: { variant: "boot" | "overview" | "performance" | "sitemaps" | "recommendations" }) {
+function Skeleton({ variant }: { variant: "boot" | "overview" | "performance" | "sitemaps" | "recommendations" | "vitals" }) {
+  if (variant === "vitals") {
+    return (
+      <div className="skeleton-page" aria-label="Running Lighthouse audit" aria-busy="true">
+        <section className="card skeleton-overview">
+          <div className="skeleton-heading"><i /><i /></div>
+          <div className="skeleton-vitals-rings">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div>
+        </section>
+        <section className="card skeleton-metrics skeleton-vitals-metrics">{[0, 1, 2, 3, 4, 5, 6].map((item) => <div className="skeleton-block" key={item}><i /><b /></div>)}</section>
+        <section className="card skeleton-chart skeleton-vitals-chart"><span /><span /><span /><span /><i className="skeleton-line wide" /><i className="skeleton-line medium" /></section>
+        <section className="card skeleton-table">
+          <div className="skeleton-heading"><i /><i /></div>
+          {[0, 1, 2, 3, 4].map((item) => <div className="skeleton-row" key={item}><i /><i /><i /></div>)}
+        </section>
+      </div>
+    );
+  }
   if (variant === "performance") {
     return (
       <div className="skeleton-page" aria-label="Loading performance data" aria-busy="true">
@@ -1023,6 +1094,422 @@ function NoCredentials({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+const cwvMetricConfig: {
+  id: string;
+  abbreviation: string;
+  label: string;
+  good: number;
+  poor: number;
+  goodLabel: string;
+  poorLabel: string;
+}[] = [
+  { id: "largest-contentful-paint", abbreviation: "LCP", label: "Largest Contentful Paint", good: 2500, poor: 4000, goodLabel: "2.5 s", poorLabel: "4.0 s" },
+  { id: "interaction-to-next-paint", abbreviation: "INP", label: "Interaction to Next Paint", good: 200, poor: 500, goodLabel: "200 ms", poorLabel: "500 ms" },
+  { id: "cumulative-layout-shift", abbreviation: "CLS", label: "Cumulative Layout Shift", good: 0.1, poor: 0.25, goodLabel: "0.1", poorLabel: "0.25" },
+  { id: "total-blocking-time", abbreviation: "TBT", label: "Total Blocking Time", good: 200, poor: 600, goodLabel: "200 ms", poorLabel: "600 ms" },
+  { id: "first-contentful-paint", abbreviation: "FCP", label: "First Contentful Paint", good: 1800, poor: 3000, goodLabel: "1.8 s", poorLabel: "3.0 s" },
+  { id: "speed-index", abbreviation: "SI", label: "Speed Index", good: 3400, poor: 5800, goodLabel: "3.4 s", poorLabel: "5.8 s" },
+  { id: "server-response-time", abbreviation: "TTFB", label: "Time to First Byte", good: 800, poor: 1800, goodLabel: "0.8 s", poorLabel: "1.8 s" },
+];
+
+function scoreRating(score?: number | null) {
+  if (score === null || score === undefined) return "unknown";
+  if (score >= 0.9) return "good";
+  if (score >= 0.5) return "average";
+  return "poor";
+}
+
+function ratingLabel(rating: string) {
+  if (rating === "good") return "Good";
+  if (rating === "average") return "Needs improvement";
+  if (rating === "poor") return "Poor";
+  return "No data";
+}
+
+function metricRating(audit: LighthouseAudit, good: number, poor: number) {
+  if (audit.numericValue !== null && audit.numericValue !== undefined) {
+    if (audit.numericValue <= good) return "good";
+    if (audit.numericValue <= poor) return "average";
+    return "poor";
+  }
+  return scoreRating(audit.score);
+}
+
+function formatDetailValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(formatDetailValue).filter(Boolean).join(", ");
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.snippet === "string") return record.snippet;
+    if (typeof record.selector === "string") return record.selector;
+    if (typeof record.text === "string") return record.text;
+    return Object.entries(record)
+      .map(([key, item]) => `${key}: ${formatDetailValue(item)}`)
+      .join(" · ");
+  }
+  return String(value);
+}
+
+function formatAuditTime(value: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function ScoreRing({ score, label, size = 96 }: { score?: number | null; label: string; size?: number }) {
+  const value = Math.max(0, Math.min(1, score ?? 0));
+  const stroke = Math.max(5, size * 0.075);
+  const radius = size / 2 - stroke;
+  const circumference = 2 * Math.PI * radius;
+  const rating = scoreRating(score);
+  return (
+    <div className={`cwv-ring ${rating}`} style={{ width: size, height: size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${label}: ${score === null || score === undefined ? "no score" : Math.round(value * 100)}`}>
+        <circle className="cwv-ring-track" cx={size / 2} cy={size / 2} r={radius} strokeWidth={stroke} />
+        <circle
+          className="cwv-ring-value"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          strokeWidth={stroke}
+          strokeDasharray={`${value * circumference} ${circumference}`}
+        />
+      </svg>
+      <span className="cwv-ring-label">
+        <b>{score === null || score === undefined ? "—" : Math.round(value * 100)}</b>
+        <small>{label}</small>
+      </span>
+    </div>
+  );
+}
+
+function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
+  const [url, setUrl] = useState(siteOrigin(siteUrl));
+  const [strategy, setStrategy] = useState<"mobile" | "desktop">("mobile");
+  const [report, setReport] = useState<LighthouseReport>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [expandedAudit, setExpandedAudit] = useState<string>();
+  const [showAllPassed, setShowAllPassed] = useState(false);
+  const autoRun = useRef("");
+  const siteKey = useRef(siteUrl);
+  const requestId = useRef(0);
+
+  async function analyze(force = false) {
+    const target = url.trim();
+    if (!target) {
+      setError("Enter a page URL to audit.");
+      return;
+    }
+    const id = ++requestId.current;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await invoke<LighthouseReport>("run_lighthouse", { url: target, strategy, force });
+      if (id !== requestId.current) return;
+      setReport(result);
+      setExpandedAudit(undefined);
+      setShowAllPassed(false);
+    } catch (reason) {
+      if (id !== requestId.current) return;
+      setError(String(reason));
+      setReport(undefined);
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    requestId.current += 1;
+    setUrl(siteOrigin(siteUrl));
+    setReport(undefined);
+    setError("");
+    setLoading(false);
+    siteKey.current = siteUrl;
+  }, [siteUrl]);
+
+  useEffect(() => {
+    const key = `${siteKey.current}|${strategy}`;
+    if (autoRun.current === key) return;
+    autoRun.current = key;
+    void analyze();
+    // Only auto-run once per property and strategy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategy]);
+
+  const performanceCategory = report?.categories.find((category) => category.id === "performance");
+  const metricTiles = report
+    ? cwvMetricConfig.map((config) => ({ config, audit: report.metrics.find((metric) => metric.id === config.id) }))
+    : [];
+  const allOpportunities = report
+    ? report.audits.filter((audit) => (audit.savingsMs ?? 0) > 0 || (audit.savingsBytes ?? 0) > 0)
+    : [];
+  const maxSavingsMs = Math.max(...allOpportunities.map((audit) => audit.savingsMs ?? 0), 1);
+  const maxSavingsBytes = Math.max(...allOpportunities.map((audit) => audit.savingsBytes ?? 0), 1);
+  const opportunities = allOpportunities.slice(0, 10);
+  const diagnostics = report
+    ? report.audits.filter((audit) => (audit.savingsMs ?? 0) <= 0 && (audit.savingsBytes ?? 0) <= 0)
+    : [];
+  const passed = report ? (showAllPassed ? report.passed : report.passed.slice(0, 12)) : [];
+
+  return (
+    <>
+      <div className="page-title performance-title">
+        <h1>Core Web Vitals</h1>
+        {report && <button onClick={() => void analyze(true)} disabled={loading}>↻　RE-RUN AUDIT</button>}
+      </div>
+      <div className="cwv-content">
+        <section className="card cwv-runner">
+          <div className="cwv-runner-row">
+            <div className="cwv-url-field">
+              <label htmlFor="cwv-url">Page URL</label>
+              <input
+                id="cwv-url"
+                value={url}
+                placeholder="https://example.com/"
+                spellCheck={false}
+                onChange={(event) => setUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !loading) void analyze();
+                }}
+              />
+            </div>
+            <div className="cwv-strategy" role="group" aria-label="Audit device">
+              <button
+                className={strategy === "mobile" ? "selected" : ""}
+                onClick={() => {
+                  setStrategy("mobile");
+                  setReport(undefined);
+                  setError("");
+                }}
+              >
+                Mobile
+              </button>
+              <button
+                className={strategy === "desktop" ? "selected" : ""}
+                onClick={() => {
+                  setStrategy("desktop");
+                  setReport(undefined);
+                  setError("");
+                }}
+              >
+                Desktop
+              </button>
+            </div>
+            <button className="cwv-run" onClick={() => void analyze()} disabled={loading || !url.trim()}>
+              {loading ? <><span className="cwv-spinner" />Auditing…</> : report ? "Re-run audit" : "Analyze page"}
+            </button>
+          </div>
+          <p className="cwv-runner-note">
+            Lighthouse audits the page in a headless Chrome browser. This is a single lab run, not field data collected from real visitors. The audit requires Node.js and Chrome or Edge to be installed.
+          </p>
+        </section>
+
+        {loading ? <Skeleton variant="vitals" /> : error ? <ErrorCard error={error} retry={() => void analyze()} /> : !report ? (
+          <section className="card cwv-empty">
+            <div className="cwv-empty-icon">⚡</div>
+            <h2>Audit any page with Lighthouse</h2>
+            <p>Enter a URL above and run the audit to see performance scores, Core Web Vitals, savings opportunities and diagnostics.</p>
+            <button className="cwv-run" onClick={() => void analyze()} disabled={loading}>Analyze page</button>
+          </section>
+        ) : (
+          <>
+            <section className="card cwv-overview">
+              <div className="cwv-overview-top">
+                <div className="cwv-scores">
+                  {report.categories.map((category) => (
+                    <ScoreRing key={category.id} score={category.score} label={category.title} size={98} />
+                  ))}
+                </div>
+                <div className="cwv-verdict">
+                  <span className="cwv-chip">Lab audit</span>
+                  <h2>{performanceCategory ? ratingLabel(scoreRating(performanceCategory.score)) : "Report ready"}</h2>
+                  <p>{report.finalUrl || report.requestedUrl}</p>
+                  <span className="cwv-verdict-detail">
+                    {report.strategy === "desktop" ? "Desktop" : "Mobile"} · {report.lighthouseVersion ? `Lighthouse ${report.lighthouseVersion}` : "Lighthouse"} · {(report.durationMs / 1000).toFixed(1)} s
+                  </span>
+                </div>
+              </div>
+              <div className="cwv-meta">
+                <div><span>Audited</span><b>{formatAuditTime(report.fetchTime)}</b></div>
+                <div><span>Requested URL</span><b>{report.requestedUrl || url}</b></div>
+                <div><span>Final URL</span><b>{report.finalUrl || report.requestedUrl || url}</b></div>
+                <div><span>Form factor</span><b>{report.formFactor || report.strategy}</b></div>
+              </div>
+              {report.warnings.length > 0 && (
+                <ul className="cwv-warnings">
+                  {report.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                </ul>
+              )}
+            </section>
+
+            {metricTiles.length > 0 && (
+              <section className="card cwv-panel">
+                <div className="cwv-panel-heading">
+                  <h2>Core Web Vitals</h2>
+                  <span className="cwv-legend"><i className="good" />Good<i className="average" />Needs improvement<i className="poor" />Poor</span>
+                </div>
+                <div className="cwv-metric-grid">
+                  {metricTiles.map(({ config, audit }) => {
+                    const rating = audit ? metricRating(audit, config.good, config.poor) : "unknown";
+                    const numericValue = audit?.numericValue;
+                    const hasValue = typeof numericValue === "number";
+                    const scale = config.poor * 1.35;
+                    const position = hasValue ? Math.min(100, Math.max(0, (numericValue / scale) * 100)) : 50;
+                    return (
+                      <article className={`cwv-metric ${rating}`} key={config.id}>
+                        <div className="cwv-metric-head">
+                          <span>{config.abbreviation}</span>
+                          <b className={rating}>{ratingLabel(rating)}</b>
+                        </div>
+                        <p>{config.label}</p>
+                        <strong>{audit?.displayValue || (hasValue ? String(numericValue) : "—")}</strong>
+                        {hasValue ? (
+                          <>
+                            <div className="cwv-threshold" aria-hidden="true">
+                              <i className="good" style={{ width: `${(config.good / scale) * 100}%` }} />
+                              <i className="average" style={{ width: `${((config.poor - config.good) / scale) * 100}%` }} />
+                              <i className="poor" style={{ width: `${(1 - config.poor / scale) * 100}%` }} />
+                              <b style={{ left: `${position}%` }} />
+                            </div>
+                            <small>Good ≤ {config.goodLabel} · Poor &gt; {config.poorLabel}</small>
+                          </>
+                        ) : (
+                          <small>Not measured in this run</small>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            <div className="cwv-columns">
+              <section className="card cwv-panel cwv-opportunities">
+                <div className="cwv-panel-heading">
+                  <h2>Opportunities</h2>
+                  <span>{opportunities.length} found</span>
+                </div>
+                {opportunities.length === 0 ? (
+                  <p className="cwv-muted">No estimated savings were reported for this page.</p>
+                ) : (
+                  <div className="cwv-bars">
+                    {opportunities.map((audit, index) => (
+                      <div className="cwv-bar-row" key={audit.id}>
+                        <div className="cwv-bar-label">
+                          <b title={audit.title}>{index + 1}. {audit.title}</b>
+                          <span>{audit.displayValue || `${Math.round(audit.savingsMs ?? 0)} ms`}</span>
+                        </div>
+                        <div className="cwv-bar-track">
+                          <i style={{
+                            width: `${Math.max(4, (audit.savingsMs ?? 0) > 0
+                              ? ((audit.savingsMs ?? 0) / maxSavingsMs) * 100
+                              : ((audit.savingsBytes ?? 0) / maxSavingsBytes) * 100)}%`,
+                          }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="card cwv-panel cwv-passed">
+                <div className="cwv-panel-heading">
+                  <h2>Passed audits</h2>
+                  <span>{report.passed.length} checks</span>
+                </div>
+                {report.passed.length === 0 ? (
+                  <p className="cwv-muted">No passed audits were reported.</p>
+                ) : (
+                  <ul>
+                    {passed.map((audit) => (
+                      <li key={audit.id}><span>✓</span>{audit.title}</li>
+                    ))}
+                  </ul>
+                )}
+                {report.passed.length > 12 && (
+                  <button className="cwv-link" onClick={() => setShowAllPassed((value) => !value)}>
+                    {showAllPassed ? "Show fewer" : `Show all ${report.passed.length}`}
+                  </button>
+                )}
+              </section>
+            </div>
+
+            <section className="card cwv-panel cwv-diagnostics">
+              <div className="cwv-panel-heading">
+                <h2>Diagnostics</h2>
+                <span>{diagnostics.length} audits</span>
+              </div>
+              {diagnostics.length === 0 ? (
+                <p className="cwv-muted">No diagnostics were reported for this page.</p>
+              ) : (
+                <div className="cwv-table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Audit</th><th>Status</th><th>Value</th><th /></tr>
+                    </thead>
+                    <tbody>
+                      {diagnostics.map((audit) => {
+                        const rating = scoreRating(audit.score);
+                        const isOpen = expandedAudit === audit.id;
+                        const details = audit.details;
+                        const expandable = Boolean(audit.description || (details && details.items.length > 0));
+                        return (
+                          <Fragment key={audit.id}>
+                            <tr
+                              className={(isOpen ? "open" : "") + (expandable ? " expandable" : "")}
+                              onClick={() => {
+                                if (expandable) setExpandedAudit(isOpen ? undefined : audit.id);
+                              }}
+                            >
+                              <td><b>{audit.title}</b></td>
+                              <td><span className={`cwv-status ${rating}`}>{ratingLabel(rating)}</span></td>
+                              <td>{audit.displayValue || "—"}</td>
+                              <td className="cwv-chevron">{expandable ? (isOpen ? "▴" : "▾") : ""}</td>
+                            </tr>
+                            {isOpen && (
+                              <tr className="cwv-detail-row">
+                                <td colSpan={4}>
+                                  {audit.description && <p>{audit.description}</p>}
+                                  {details && details.items.length > 0 && details.headings.length > 0 && (
+                                    <div className="cwv-detail-table-wrap">
+                                      <table className="cwv-detail-table">
+                                        <thead>
+                                          <tr>{details.headings.map((heading, index) => <th key={index}>{heading.label || heading.key}</th>)}</tr>
+                                        </thead>
+                                        <tbody>
+                                          {details.items.map((item, rowIndex) => (
+                                            <tr key={rowIndex}>
+                                              {details.headings.map((heading, cellIndex) => (
+                                                <td key={cellIndex}>{formatDetailValue(item[heading.key ?? ""]) || "—"}</td>
+                                              ))}
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [page, setPage] = useState<Page>("overview");
   const [sites, setSites] = useState<Site[]>([]);
@@ -1126,6 +1613,7 @@ function App() {
   useEffect(() => { void loadSites(); }, [loadSites]);
   useEffect(() => {
     if (!selectedSite) return;
+    if (page === "vitals") return;
     if (page === "sitemaps") void loadSitemaps();
     else {
       void loadPerformance();
@@ -1158,6 +1646,7 @@ function App() {
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
             page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
+                page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}

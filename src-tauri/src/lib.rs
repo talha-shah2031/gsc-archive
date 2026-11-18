@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -684,6 +684,579 @@ async fn list_sitemaps(site_url: String) -> Result<Vec<Sitemap>, String> {
         .map_err(|error| format!("Could not decode sitemaps: {error}"))
 }
 
+const LIGHTHOUSE_METRICS: [&str; 7] = [
+    "largest-contentful-paint",
+    "interaction-to-next-paint",
+    "cumulative-layout-shift",
+    "total-blocking-time",
+    "first-contentful-paint",
+    "speed-index",
+    "server-response-time",
+];
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LighthouseCategory {
+    id: String,
+    title: String,
+    score: Option<f64>,
+    #[serde(default)]
+    audit_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LighthouseAudit {
+    id: String,
+    title: String,
+    description: String,
+    score: Option<f64>,
+    score_display_mode: String,
+    display_value: Option<String>,
+    numeric_value: Option<f64>,
+    numeric_unit: Option<String>,
+    category: Option<String>,
+    savings_ms: Option<f64>,
+    savings_bytes: Option<f64>,
+    #[serde(default)]
+    details: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PassedAudit {
+    id: String,
+    title: String,
+    category: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LighthouseReport {
+    requested_url: String,
+    final_url: String,
+    fetch_time: String,
+    lighthouse_version: String,
+    strategy: String,
+    form_factor: Option<String>,
+    duration_ms: u64,
+    categories: Vec<LighthouseCategory>,
+    metrics: Vec<LighthouseAudit>,
+    audits: Vec<LighthouseAudit>,
+    passed: Vec<PassedAudit>,
+    warnings: Vec<String>,
+}
+
+fn shorten(text: &str, limit: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_string();
+    }
+    let mut value: String = trimmed.chars().take(limit).collect();
+    value.push('…');
+    value
+}
+
+fn trim_lighthouse_item(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut trimmed = serde_json::Map::new();
+            for (key, item) in map {
+                match key.as_str() {
+                    "node" => {
+                        trimmed.insert(
+                            "node".to_string(),
+                            json!({
+                                "snippet": shorten(item.get("snippet").and_then(Value::as_str).unwrap_or_default(), 90),
+                                "selector": shorten(item.get("selector").and_then(Value::as_str).unwrap_or_default(), 120),
+                            }),
+                        );
+                    }
+                    "screenshot" | "data" | "trace" | "timing" | "subItems" => {}
+                    "url" => {
+                        let text = item.as_str().unwrap_or_default();
+                        let value = if text.starts_with("data:") {
+                            "(inline data)".to_string()
+                        } else {
+                            shorten(text, 180)
+                        };
+                        trimmed.insert(key.clone(), json!(value));
+                    }
+                    _ => {
+                        trimmed.insert(key.clone(), trim_lighthouse_item(item));
+                    }
+                }
+            }
+            Value::Object(trimmed)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().take(10).map(trim_lighthouse_item).collect())
+        }
+        Value::String(text) => json!(shorten(text, 220)),
+        other => other.clone(),
+    }
+}
+
+fn trim_lighthouse_details(details: &Value) -> Option<Value> {
+    let kind = details.get("type").and_then(Value::as_str)?;
+    if matches!(
+        kind,
+        "screenshot" | "filmstrip" | "full-page-screenshot" | "debugdata" | "treemap-data"
+    ) {
+        return None;
+    }
+    let headings: Vec<Value> = details
+        .get("headings")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|heading| {
+                    json!({
+                        "key": heading.get("key").and_then(Value::as_str),
+                        "label": heading.get("label").and_then(Value::as_str),
+                        "valueType": heading.get("valueType").and_then(Value::as_str),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let items: Vec<Value> = details
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(10)
+                .map(trim_lighthouse_item)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(json!({ "type": kind, "headings": headings, "items": items }))
+}
+
+fn parse_lighthouse_report(
+    report: &Value,
+    strategy: &str,
+    duration_ms: u64,
+) -> Result<LighthouseReport, String> {
+    let audit_values = report
+        .get("audits")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Lighthouse returned an empty report".to_string())?;
+    let mut categories = Vec::new();
+    let mut audit_categories: HashMap<String, String> = HashMap::new();
+    if let Some(values) = report.get("categories").and_then(Value::as_object) {
+        for (id, category) in values {
+            let refs: Vec<String> = category
+                .get("auditRefs")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            item.get("id")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for reference in &refs {
+                audit_categories
+                    .entry(reference.clone())
+                    .or_insert_with(|| id.clone());
+            }
+            categories.push(LighthouseCategory {
+                id: id.clone(),
+                title: category
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string(),
+                score: category.get("score").and_then(Value::as_f64),
+                audit_refs: refs,
+            });
+        }
+    }
+
+    let mut metrics = Vec::new();
+    let mut audits = Vec::new();
+    let mut passed = Vec::new();
+    for (id, audit) in audit_values {
+        let score_display_mode = audit
+            .get("scoreDisplayMode")
+            .and_then(Value::as_str)
+            .unwrap_or("numeric")
+            .to_string();
+        let score = audit.get("score").and_then(Value::as_f64);
+        let title = audit
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or(id)
+            .to_string();
+        let category = audit_categories.get(id).cloned();
+        let savings_ms = audit
+            .get("details")
+            .and_then(|details| details.get("overallSavingsMs"))
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                audit
+                    .get("metricSavings")
+                    .and_then(Value::as_object)
+                    .map(|values| {
+                        values
+                            .values()
+                            .filter_map(Value::as_f64)
+                            .fold(0.0_f64, f64::max)
+                    })
+            });
+        let savings_bytes = audit
+            .get("details")
+            .and_then(|details| details.get("overallSavingsBytes"))
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                audit
+                    .get("details")
+                    .and_then(|details| details.get("debugData"))
+                    .and_then(|debug| debug.get("wastedBytes"))
+                    .and_then(Value::as_f64)
+            });
+
+        if LIGHTHOUSE_METRICS.contains(&id.as_str()) {
+            metrics.push(LighthouseAudit {
+                id: id.clone(),
+                title,
+                description: shorten(
+                    audit.get("description").and_then(Value::as_str).unwrap_or(""),
+                    500,
+                ),
+                score,
+                score_display_mode,
+                display_value: audit
+                    .get("displayValue")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                numeric_value: audit.get("numericValue").and_then(Value::as_f64),
+                numeric_unit: audit
+                    .get("numericUnit")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                category,
+                savings_ms,
+                savings_bytes,
+                details: None,
+            });
+            continue;
+        }
+
+        if matches!(
+            score_display_mode.as_str(),
+            "notApplicable" | "manual" | "error" | "informative"
+        ) {
+            continue;
+        }
+
+        if score == Some(1.0) {
+            passed.push(PassedAudit {
+                id: id.clone(),
+                title,
+                category,
+            });
+            continue;
+        }
+
+        audits.push(LighthouseAudit {
+            id: id.clone(),
+            title,
+            description: shorten(
+                audit.get("description").and_then(Value::as_str).unwrap_or(""),
+                500,
+            ),
+            score,
+            score_display_mode,
+            display_value: audit
+                .get("displayValue")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            numeric_value: audit.get("numericValue").and_then(Value::as_f64),
+            numeric_unit: audit
+                .get("numericUnit")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            category,
+            savings_ms,
+            savings_bytes,
+            details: audit.get("details").and_then(trim_lighthouse_details),
+        });
+    }
+
+    metrics.sort_by_key(|audit| {
+        LIGHTHOUSE_METRICS
+            .iter()
+            .position(|id| *id == audit.id)
+            .unwrap_or(usize::MAX)
+    });
+    audits.sort_by(|left, right| {
+        let left_weight =
+            left.savings_ms.unwrap_or(0.0) + left.savings_bytes.unwrap_or(0.0) / 1000.0;
+        let right_weight =
+            right.savings_ms.unwrap_or(0.0) + right.savings_bytes.unwrap_or(0.0) / 1000.0;
+        right_weight
+            .partial_cmp(&left_weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.score
+                    .unwrap_or(1.0)
+                    .partial_cmp(&right.score.unwrap_or(1.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    passed.sort_by(|left, right| left.title.cmp(&right.title));
+
+    Ok(LighthouseReport {
+        requested_url: report
+            .get("requestedUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        final_url: report
+            .get("finalDisplayedUrl")
+            .or_else(|| report.get("finalUrl"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        fetch_time: report
+            .get("fetchTime")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        lighthouse_version: report
+            .get("lighthouseVersion")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        strategy: report
+            .get("configSettings")
+            .and_then(|settings| settings.get("formFactor"))
+            .and_then(Value::as_str)
+            .unwrap_or(strategy)
+            .to_string(),
+        form_factor: report
+            .get("configSettings")
+            .and_then(|settings| settings.get("formFactor"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        duration_ms,
+        categories,
+        metrics,
+        audits,
+        passed,
+        warnings: report
+            .get("runWarnings")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+fn lighthouse_cli_path() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("LIGHTHOUSE_CLI_PATH") {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    if let Ok(directory) = std::env::current_dir() {
+        roots.push(directory);
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
+    for root in roots {
+        let mut directory: Option<&Path> = Some(root.as_path());
+        for _ in 0..6 {
+            let Some(current) = directory else { break };
+            for entry in ["cli", "lighthouse-cli"] {
+                let candidate = current
+                    .join("node_modules")
+                    .join("lighthouse")
+                    .join(entry)
+                    .join("index.js");
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+            directory = current.parent();
+        }
+    }
+    None
+}
+
+fn chrome_path() -> Option<String> {
+    if let Ok(value) = std::env::var("CHROME_PATH") {
+        if PathBuf::from(&value).is_file() {
+            return Some(value);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for variable in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+            if let Ok(root) = std::env::var(variable) {
+                candidates.push(
+                    PathBuf::from(&root)
+                        .join("Google")
+                        .join("Chrome")
+                        .join("Application")
+                        .join("chrome.exe"),
+                );
+                candidates.push(
+                    PathBuf::from(&root)
+                        .join("Microsoft")
+                        .join("Edge")
+                        .join("Application")
+                        .join("msedge.exe"),
+                );
+            }
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+async fn run_lighthouse_cli(url: &str, strategy: &str) -> Result<Value, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let output_path = std::env::temp_dir().join(format!("gsc-studio-lighthouse-{stamp}.json"));
+    let chrome_flags = "--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage";
+
+    let mut command = match lighthouse_cli_path() {
+        Some(cli) => {
+            let mut command = tokio::process::Command::new("node");
+            command.arg(cli);
+            command
+        }
+        None => {
+            if cfg!(windows) {
+                let mut command = tokio::process::Command::new("cmd");
+                command.args([
+                    "/C",
+                    "npx.cmd",
+                    "--yes",
+                    "--package",
+                    "lighthouse@13",
+                    "lighthouse",
+                ]);
+                command
+            } else {
+                let mut command = tokio::process::Command::new("npx");
+                command.args(["--yes", "--package", "lighthouse@13", "lighthouse"]);
+                command
+            }
+        }
+    };
+    command
+        .arg(url)
+        .arg("--output=json")
+        .arg(format!("--output-path={}", output_path.display()))
+        .arg(format!("--chrome-flags={chrome_flags}"))
+        .arg("--only-categories=performance,accessibility,best-practices,seo")
+        .arg("--max-wait-for-load=45000")
+        .arg("--quiet")
+        .stdin(std::process::Stdio::null());
+    if strategy == "desktop" {
+        command.arg("--preset=desktop");
+    }
+    if let Some(path) = chrome_path() {
+        command.env("CHROME_PATH", path);
+    }
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+
+    let output = match tokio::time::timeout(Duration::from_secs(240), command.output()).await {
+        Err(_) => {
+            let _ = tokio::fs::remove_file(&output_path).await;
+            return Err("The Lighthouse audit timed out after 4 minutes".to_string());
+        }
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("Lighthouse needs Node.js and Chrome. Install Node.js or set LIGHTHOUSE_CLI_PATH to the Lighthouse CLI file.".to_string());
+        }
+        Ok(Err(error)) => {
+            return Err(format!("Lighthouse could not start: {error}"));
+        }
+        Ok(Ok(output)) => output,
+    };
+
+    if !output.status.success() {
+        let _ = tokio::fs::remove_file(&output_path).await;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("Lighthouse could not audit this page");
+        return Err(format!("Lighthouse failed: {}", shorten(message, 300)));
+    }
+
+    let bytes = tokio::fs::read(&output_path).await.map_err(|error| {
+        format!("Lighthouse did not produce a report for this page: {error}")
+    })?;
+    let _ = tokio::fs::remove_file(&output_path).await;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Could not decode the Lighthouse report: {error}"))
+}
+
+#[tauri::command]
+async fn run_lighthouse(
+    url: String,
+    strategy: String,
+    force: bool,
+) -> Result<LighthouseReport, String> {
+    let url = url.trim().to_string();
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| "Enter a valid URL, for example https://example.com".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http and https pages can be audited".to_string());
+    }
+    let strategy = if strategy == "desktop" {
+        "desktop"
+    } else {
+        "mobile"
+    };
+    let cache_key = format!("LIGHTHOUSE:{strategy}:{url}");
+    if !force {
+        if let Some(value) = read_cache(&cache_key).await {
+            if let Ok(report) = serde_json::from_value::<LighthouseReport>(value) {
+                return Ok(report);
+            }
+        }
+    }
+    let started = Instant::now();
+    let raw = run_lighthouse_cli(&url, strategy).await?;
+    let report = parse_lighthouse_report(&raw, strategy, started.elapsed().as_millis() as u64)?;
+    if let Ok(value) = serde_json::to_value(&report) {
+        write_cache(cache_key, value).await;
+    }
+    Ok(report)
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -702,7 +1275,8 @@ pub fn run() {
             activate_credential,
             get_performance,
             get_recommendations,
-            list_sitemaps
+            list_sitemaps,
+            run_lighthouse
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
