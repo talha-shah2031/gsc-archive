@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tokio::sync::RwLock;
 use yup_oauth2::{ServiceAccountAuthenticator, ServiceAccountKey, read_service_account_key};
@@ -799,8 +799,11 @@ async fn delete_sitemap(site_url: String, sitemap_url: String) -> Result<(), Str
     .await
 }
 
-#[tauri::command]
-async fn inspect_url(site_url: String, inspection_url: String) -> Result<Value, String> {
+async fn inspect_url_with_token(
+    site_url: &str,
+    inspection_url: &str,
+    token: &str,
+) -> Result<Value, String> {
     let inspection_url = inspection_url.trim().to_string();
     let parsed = reqwest::Url::parse(&inspection_url)
         .map_err(|_| "Enter a valid URL, for example https://example.com/page".to_string())?;
@@ -813,7 +816,7 @@ async fn inspect_url(site_url: String, inspection_url: String) -> Result<Value, 
     }
     let response = reqwest::Client::new()
         .post("https://searchconsole.googleapis.com/v1/urlInspection/index:inspect")
-        .bearer_auth(access_token().await?)
+        .bearer_auth(token)
         .json(&json!({
             "inspectionUrl": inspection_url,
             "siteUrl": site_url,
@@ -829,6 +832,1221 @@ async fn inspect_url(site_url: String, inspection_url: String) -> Result<Value, 
         .ok_or_else(|| "Google did not return an inspection result for this URL".to_string())?;
     write_cache(cache_key, result.clone()).await;
     Ok(result)
+}
+
+async fn inspect_url_cached(site_url: &str, inspection_url: &str) -> Result<Value, String> {
+    let cache_key = format!("URL_INSPECTION:{site_url}:{}", inspection_url.trim());
+    if let Some(value) = read_cache(&cache_key).await {
+        return Ok(value);
+    }
+    let token = access_token().await?;
+    inspect_url_with_token(site_url, inspection_url, &token).await
+}
+
+#[tauri::command]
+async fn inspect_url(site_url: String, inspection_url: String) -> Result<Value, String> {
+    inspect_url_cached(&site_url, &inspection_url).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditCheck {
+    id: String,
+    title: String,
+    status: String,
+    count: usize,
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeoOverview {
+    current: MetricRow,
+    previous: MetricRow,
+    clicks_change: f64,
+    impressions_change: f64,
+    ctr_change: f64,
+    position_change: f64,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SitemapAudit {
+    total: usize,
+    errors: usize,
+    warnings: usize,
+    pending: usize,
+    stale: usize,
+    zero_indexed: usize,
+    submitted_urls: f64,
+    indexed_urls: f64,
+    issues: Vec<SitemapAuditIssue>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SitemapAuditIssue {
+    path: String,
+    issue: String,
+    severity: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CtrOpportunity {
+    key: String,
+    kind: String,
+    clicks: f64,
+    impressions: f64,
+    ctr: f64,
+    position: f64,
+    benchmark_ctr: f64,
+    missed_clicks: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StrikingDistance {
+    query: String,
+    clicks: f64,
+    impressions: f64,
+    ctr: f64,
+    position: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DecliningItem {
+    key: String,
+    kind: String,
+    clicks: f64,
+    previous_clicks: f64,
+    impressions: f64,
+    previous_impressions: f64,
+    clicks_change: f64,
+    impressions_change: f64,
+    position: f64,
+    previous_position: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CannibalPage {
+    page: String,
+    clicks: f64,
+    impressions: f64,
+    position: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CannibalizationItem {
+    query: String,
+    impressions: f64,
+    pages: Vec<CannibalPage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceGapItem {
+    page: String,
+    mobile_position: f64,
+    desktop_position: f64,
+    gap: f64,
+    mobile_impressions: f64,
+    desktop_impressions: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchAppearanceRow {
+    appearance: String,
+    clicks: f64,
+    impressions: f64,
+    ctr: f64,
+    position: f64,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct IndexingAudit {
+    sampled: usize,
+    inspected: usize,
+    indexed: usize,
+    not_indexed: usize,
+    failed: usize,
+    stale: usize,
+    canonical_mismatches: usize,
+    robots_blocked: usize,
+    fetch_failed: usize,
+    mobile_issue_pages: usize,
+    rich_issue_pages: usize,
+    items: Vec<IndexingItem>,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexingItem {
+    url: String,
+    verdict: String,
+    coverage_state: String,
+    indexing_state: String,
+    last_crawl_time: Option<String>,
+    page_fetch_state: String,
+    robots_txt_state: String,
+    crawled_as: Option<String>,
+    user_canonical: Option<String>,
+    google_canonical: Option<String>,
+    canonical_mismatch: bool,
+    sitemap_count: usize,
+    mobile_issues: usize,
+    rich_issues: usize,
+    impressions: f64,
+    clicks: f64,
+    issue: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeoAuditReport {
+    generated_at: u64,
+    data_start: String,
+    data_end: String,
+    previous_start: String,
+    previous_end: String,
+    search_type: String,
+    min_impressions: f64,
+    inspect_limit: usize,
+    overview: SeoOverview,
+    checks: Vec<AuditCheck>,
+    sitemaps: SitemapAudit,
+    ctr_opportunities: Vec<CtrOpportunity>,
+    striking_distance: Vec<StrikingDistance>,
+    declining: Vec<DecliningItem>,
+    cannibalization: Vec<CannibalizationItem>,
+    device_gap: Vec<DeviceGapItem>,
+    search_appearance: Vec<SearchAppearanceRow>,
+    indexing: IndexingAudit,
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = (month + 9) % 12;
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn parse_rfc3339_millis(value: &str) -> Option<u64> {
+    let year: i64 = value.get(0..4)?.parse().ok()?;
+    let month: i64 = value.get(5..7)?.parse().ok()?;
+    let day: i64 = value.get(8..10)?.parse().ok()?;
+    let hour: i64 = value.get(11..13)?.parse().ok()?;
+    let minute: i64 = value.get(14..16)?.parse().ok()?;
+    let second: i64 = value.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
+    u64::try_from(seconds * 1_000).ok()
+}
+
+fn percent_change(current: f64, previous: f64) -> f64 {
+    if previous > 0.0 {
+        (current - previous) / previous * 100.0
+    } else if current > 0.0 {
+        100.0
+    } else {
+        0.0
+    }
+}
+
+fn position_bucket(position: f64) -> usize {
+    if position <= 3.0 {
+        0
+    } else if position <= 10.0 {
+        1
+    } else if position <= 20.0 {
+        2
+    } else {
+        3
+    }
+}
+
+fn ctr_by_bucket(rows: &[MetricRow]) -> [f64; 4] {
+    let mut clicks = [0.0_f64; 4];
+    let mut impressions = [0.0_f64; 4];
+    for row in rows {
+        let bucket = position_bucket(row.position);
+        clicks[bucket] += row.clicks;
+        impressions[bucket] += row.impressions;
+    }
+    let mut values = [0.0_f64; 4];
+    for (index, value) in values.iter_mut().enumerate() {
+        if impressions[index] > 0.0 {
+            *value = clicks[index] / impressions[index];
+        }
+    }
+    values
+}
+
+fn collect_ctr_opportunities(
+    rows: &[MetricRow],
+    kind: &str,
+    min_impressions: f64,
+) -> Vec<CtrOpportunity> {
+    let benchmarks = ctr_by_bucket(rows);
+    rows.iter()
+        .filter_map(|row| {
+            let key = row.keys.first()?.clone();
+            let benchmark = benchmarks[position_bucket(row.position)];
+            if row.impressions < min_impressions
+                || row.position <= 0.0
+                || row.position > 10.0
+                || benchmark <= 0.0
+                || row.ctr >= benchmark * 0.7
+            {
+                return None;
+            }
+            let missed = (benchmark - row.ctr) * row.impressions;
+            (missed >= 10.0).then(|| CtrOpportunity {
+                key,
+                kind: kind.to_string(),
+                clicks: row.clicks,
+                impressions: row.impressions,
+                ctr: row.ctr,
+                position: row.position,
+                benchmark_ctr: benchmark,
+                missed_clicks: missed,
+            })
+        })
+        .collect()
+}
+
+fn collect_striking_distance(rows: &[MetricRow], min_impressions: f64) -> Vec<StrikingDistance> {
+    let mut items: Vec<StrikingDistance> = rows
+        .iter()
+        .filter_map(|row| {
+            let query = row.keys.first()?.clone();
+            (row.position >= 5.0 && row.position <= 20.0 && row.impressions >= min_impressions)
+                .then(|| StrikingDistance {
+                    query,
+                    clicks: row.clicks,
+                    impressions: row.impressions,
+                    ctr: row.ctr,
+                    position: row.position,
+                })
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .impressions
+            .partial_cmp(&left.impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    items.truncate(30);
+    items
+}
+
+fn collect_declining_items(
+    current: &[MetricRow],
+    previous: &[MetricRow],
+    kind: &str,
+    min_impressions: f64,
+) -> Vec<DecliningItem> {
+    let current_by_key: HashMap<&str, &MetricRow> = current
+        .iter()
+        .filter_map(|row| Some((row.keys.first()?.as_str(), row)))
+        .collect();
+    let mut scored: Vec<(f64, DecliningItem)> = previous
+        .iter()
+        .filter_map(|row| {
+            let key = row.keys.first()?.clone();
+            if row.clicks < 5.0 && row.impressions < min_impressions {
+                return None;
+            }
+            let now = current_by_key.get(key.as_str()).copied();
+            let clicks = now.map(|item| item.clicks).unwrap_or_default();
+            let impressions = now.map(|item| item.impressions).unwrap_or_default();
+            let position = now.map(|item| item.position).unwrap_or_default();
+            let clicks_change = percent_change(clicks, row.clicks);
+            let impressions_change = percent_change(impressions, row.impressions);
+            if clicks_change > -20.0 && impressions_change > -20.0 {
+                return None;
+            }
+            let lost =
+                (row.clicks - clicks).max(0.0) * 20.0 + (row.impressions - impressions).max(0.0);
+            Some((
+                lost,
+                DecliningItem {
+                    key,
+                    kind: kind.to_string(),
+                    clicks,
+                    previous_clicks: row.clicks,
+                    impressions,
+                    previous_impressions: row.impressions,
+                    clicks_change,
+                    impressions_change,
+                    position,
+                    previous_position: row.position,
+                },
+            ))
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored.into_iter().take(30).map(|(_, item)| item).collect()
+}
+
+fn collect_cannibalization(rows: &[MetricRow], min_impressions: f64) -> Vec<CannibalizationItem> {
+    let mut grouped: HashMap<String, Vec<CannibalPage>> = HashMap::new();
+    for row in rows {
+        if row.impressions < 5.0 {
+            continue;
+        }
+        let (Some(query), Some(page)) = (row.keys.first(), row.keys.get(1)) else {
+            continue;
+        };
+        grouped
+            .entry(query.clone())
+            .or_default()
+            .push(CannibalPage {
+                page: page.clone(),
+                clicks: row.clicks,
+                impressions: row.impressions,
+                position: row.position,
+            });
+    }
+    let mut items: Vec<CannibalizationItem> = grouped
+        .into_iter()
+        .filter_map(|(query, mut pages)| {
+            let total: f64 = pages.iter().map(|page| page.impressions).sum();
+            if pages.len() < 2 || total < min_impressions {
+                return None;
+            }
+            pages.sort_by(|left, right| {
+                left.position
+                    .partial_cmp(&right.position)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            pages.truncate(5);
+            Some(CannibalizationItem {
+                query,
+                impressions: total,
+                pages,
+            })
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .impressions
+            .partial_cmp(&left.impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    items.truncate(20);
+    items
+}
+
+fn collect_device_gaps(
+    mobile: &[MetricRow],
+    desktop: &[MetricRow],
+    min_impressions: f64,
+) -> Vec<DeviceGapItem> {
+    let desktop_by_page: HashMap<&str, &MetricRow> = desktop
+        .iter()
+        .filter_map(|row| Some((row.keys.first()?.as_str(), row)))
+        .collect();
+    let mut items: Vec<DeviceGapItem> = mobile
+        .iter()
+        .filter_map(|row| {
+            let page = row.keys.first()?.clone();
+            let desktop_row = desktop_by_page.get(page.as_str())?;
+            if row.impressions < min_impressions / 2.0
+                || row.position <= 0.0
+                || desktop_row.position <= 0.0
+            {
+                return None;
+            }
+            let gap = row.position - desktop_row.position;
+            (gap >= 5.0).then(|| DeviceGapItem {
+                page,
+                mobile_position: row.position,
+                desktop_position: desktop_row.position,
+                gap,
+                mobile_impressions: row.impressions,
+                desktop_impressions: desktop_row.impressions,
+            })
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .gap
+            .partial_cmp(&left.gap)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    items.truncate(20);
+    items
+}
+
+fn sitemap_number(value: &Option<String>) -> f64 {
+    value
+        .as_deref()
+        .and_then(|item| item.parse::<f64>().ok())
+        .unwrap_or_default()
+}
+
+fn seo_severity_rank(severity: &str) -> u8 {
+    match severity {
+        "error" => 0,
+        "warning" => 1,
+        _ => 2,
+    }
+}
+
+fn build_sitemap_audit(sitemaps: &[Sitemap], now: u64) -> SitemapAudit {
+    let mut audit = SitemapAudit {
+        total: sitemaps.len(),
+        ..Default::default()
+    };
+    for item in sitemaps {
+        let errors = sitemap_number(&item.errors);
+        let warnings = sitemap_number(&item.warnings);
+        let submitted: f64 = item
+            .contents
+            .iter()
+            .map(|content| sitemap_number(&content.submitted))
+            .sum();
+        let indexed: f64 = item
+            .contents
+            .iter()
+            .map(|content| sitemap_number(&content.indexed))
+            .sum();
+        audit.submitted_urls += submitted;
+        audit.indexed_urls += indexed;
+        if errors > 0.0 {
+            audit.errors += 1;
+        }
+        if warnings > 0.0 {
+            audit.warnings += 1;
+        }
+        let pending = item.is_pending.unwrap_or(false);
+        if pending {
+            audit.pending += 1;
+        }
+        let stale = item
+            .last_downloaded
+            .as_deref()
+            .and_then(parse_rfc3339_millis)
+            .map(|time| now.saturating_sub(time) > 7 * 86_400_000)
+            .unwrap_or(false);
+        if stale {
+            audit.stale += 1;
+        }
+        if submitted > 0.0 && indexed == 0.0 {
+            audit.zero_indexed += 1;
+        }
+        let mut problems = Vec::new();
+        let mut severity = "info";
+        if errors > 0.0 {
+            problems.push(format!("{} error(s)", errors as u64));
+            severity = "error";
+        }
+        if warnings > 0.0 {
+            problems.push(format!("{} warning(s)", warnings as u64));
+            if severity != "error" {
+                severity = "warning";
+            }
+        }
+        if pending {
+            problems.push("Pending processing".to_string());
+            if severity != "error" {
+                severity = "warning";
+            }
+        }
+        if stale {
+            problems.push("Not downloaded in the last 7 days".to_string());
+            if severity != "error" {
+                severity = "warning";
+            }
+        }
+        if submitted > 0.0 && indexed == 0.0 {
+            problems.push("No indexed URLs reported".to_string());
+            if severity != "error" {
+                severity = "warning";
+            }
+        } else if submitted > 0.0 && indexed / submitted < 0.5 {
+            problems.push(format!(
+                "Only {} of {} submitted URLs indexed",
+                indexed as u64, submitted as u64
+            ));
+            if severity != "error" {
+                severity = "warning";
+            }
+        }
+        if !problems.is_empty() {
+            audit.issues.push(SitemapAuditIssue {
+                path: item.path.clone(),
+                issue: problems.join("; "),
+                severity: severity.to_string(),
+            });
+        }
+    }
+    audit.issues.sort_by(|left, right| {
+        seo_severity_rank(&left.severity).cmp(&seo_severity_rank(&right.severity))
+    });
+    audit
+}
+
+fn value_string(value: &Value, path: &str) -> Option<String> {
+    value.pointer(path)?.as_str().map(ToOwned::to_owned)
+}
+
+fn array_len_at(value: &Value, path: &str) -> usize {
+    value
+        .pointer(path)
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn rich_issue_count(value: &Value) -> usize {
+    value
+        .pointer("/richResultsResult/detectedItems")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| {
+                    group
+                        .pointer("/items")
+                        .and_then(Value::as_array)
+                        .map(|items| items.iter().map(|item| array_len_at(item, "/issues")).sum())
+                        .unwrap_or(0)
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+fn property_sample_url(site_url: &str) -> String {
+    site_url
+        .strip_prefix("sc-domain:")
+        .map(|domain| format!("https://{domain}/"))
+        .unwrap_or_else(|| site_url.to_string())
+}
+
+#[tauri::command]
+async fn run_seo_audit(
+    site_url: String,
+    start_date: String,
+    end_date: String,
+    previous_start: String,
+    previous_end: String,
+    search_type: String,
+    min_impressions: Option<f64>,
+    inspect_limit: Option<u32>,
+) -> Result<SeoAuditReport, String> {
+    let search_type = match search_type.as_str() {
+        "image" | "video" | "news" => search_type,
+        _ => "web".to_string(),
+    };
+    let min_impressions = min_impressions.unwrap_or(100.0).clamp(1.0, 100_000.0);
+    let inspect_limit = inspect_limit.unwrap_or(25).clamp(1, 50) as usize;
+
+    let (
+        summary_current,
+        summary_previous,
+        pages_current,
+        pages_previous,
+        queries_current,
+        queries_previous,
+        query_pages,
+        mobile_pages,
+        desktop_pages,
+        search_appearances,
+        sitemaps,
+    ) = tokio::join!(
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec![],
+            1,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &previous_start,
+            &previous_end,
+            vec![],
+            1,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["page"],
+            25_000,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &previous_start,
+            &previous_end,
+            vec!["page"],
+            25_000,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["query"],
+            25_000,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &previous_start,
+            &previous_end,
+            vec!["query"],
+            25_000,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["query", "page"],
+            25_000,
+            &search_type,
+            None
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["page"],
+            25_000,
+            &search_type,
+            Some(("device", "equals", "MOBILE"))
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["page"],
+            25_000,
+            &search_type,
+            Some(("device", "equals", "DESKTOP"))
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["searchAppearance"],
+            25_000,
+            &search_type,
+            None
+        ),
+        list_sitemaps(site_url.clone()),
+    );
+
+    let overview_current = summary_current?.into_iter().next().unwrap_or_default();
+    let overview_previous = summary_previous?.into_iter().next().unwrap_or_default();
+    let pages_current = pages_current?;
+    let pages_previous = pages_previous?;
+    let queries_current = queries_current?;
+    let queries_previous = queries_previous?;
+    let query_pages = query_pages?;
+    let mobile_pages = mobile_pages?;
+    let desktop_pages = desktop_pages?;
+    let mut search_appearance: Vec<SearchAppearanceRow> = search_appearances?
+        .into_iter()
+        .filter_map(|row| {
+            Some(SearchAppearanceRow {
+                appearance: row.keys.first()?.clone(),
+                clicks: row.clicks,
+                impressions: row.impressions,
+                ctr: row.ctr,
+                position: row.position,
+            })
+        })
+        .collect();
+    search_appearance.sort_by(|left, right| {
+        right
+            .impressions
+            .partial_cmp(&left.impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    search_appearance.truncate(20);
+    let now = now_millis();
+    let sitemap_audit = build_sitemap_audit(&sitemaps?, now);
+
+    let mut ctr_opportunities =
+        collect_ctr_opportunities(&queries_current, "query", min_impressions);
+    ctr_opportunities.extend(collect_ctr_opportunities(
+        &pages_current,
+        "page",
+        min_impressions,
+    ));
+    ctr_opportunities.sort_by(|left, right| {
+        right
+            .missed_clicks
+            .partial_cmp(&left.missed_clicks)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    ctr_opportunities.truncate(30);
+
+    let striking_distance = collect_striking_distance(&queries_current, min_impressions);
+
+    let mut declining =
+        collect_declining_items(&pages_current, &pages_previous, "page", min_impressions);
+    declining.extend(collect_declining_items(
+        &queries_current,
+        &queries_previous,
+        "query",
+        min_impressions,
+    ));
+    declining.sort_by(|left, right| {
+        let left_lost = (left.previous_clicks - left.clicks).max(0.0) * 20.0
+            + (left.previous_impressions - left.impressions).max(0.0);
+        let right_lost = (right.previous_clicks - right.clicks).max(0.0) * 20.0
+            + (right.previous_impressions - right.impressions).max(0.0);
+        right_lost
+            .partial_cmp(&left_lost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    declining.truncate(30);
+
+    let cannibalization = collect_cannibalization(&query_pages, min_impressions);
+    let device_gap = collect_device_gaps(&mobile_pages, &desktop_pages, min_impressions);
+
+    let page_metrics: HashMap<String, MetricRow> = pages_current
+        .iter()
+        .filter_map(|row| Some((row.keys.first()?.clone(), row.clone())))
+        .collect();
+    let mut sample = vec![property_sample_url(&site_url)];
+    for row in &pages_current {
+        if sample.len() >= inspect_limit {
+            break;
+        }
+        if let Some(url) = row.keys.first() {
+            if (url.starts_with("http://") || url.starts_with("https://"))
+                && !sample.iter().any(|existing| existing == url)
+            {
+                sample.push(url.clone());
+            }
+        }
+    }
+
+    let mut indexing = IndexingAudit {
+        sampled: sample.len(),
+        ..Default::default()
+    };
+    let inspection_token = access_token().await?;
+    let mut consecutive_failures = 0;
+    for url in &sample {
+        match inspect_url_with_token(&site_url, url, &inspection_token).await {
+            Ok(value) => {
+                consecutive_failures = 0;
+                let verdict = value_string(&value, "/indexStatusResult/verdict")
+                    .unwrap_or_else(|| "VERDICT_UNSPECIFIED".to_string());
+                let coverage_state = value_string(&value, "/indexStatusResult/coverageState")
+                    .unwrap_or_else(|| "Not provided".to_string());
+                let indexing_state = value_string(&value, "/indexStatusResult/indexingState")
+                    .unwrap_or_else(|| "INDEXING_STATE_UNSPECIFIED".to_string());
+                let page_fetch_state = value_string(&value, "/indexStatusResult/pageFetchState")
+                    .unwrap_or_else(|| "PAGE_FETCH_STATE_UNSPECIFIED".to_string());
+                let robots_txt_state = value_string(&value, "/indexStatusResult/robotsTxtState")
+                    .unwrap_or_else(|| "ROBOTS_TXT_STATE_UNSPECIFIED".to_string());
+                let last_crawl_time = value_string(&value, "/indexStatusResult/lastCrawlTime");
+                let crawled_as = value_string(&value, "/indexStatusResult/crawledAs");
+                let user_canonical = value_string(&value, "/indexStatusResult/userCanonical");
+                let google_canonical = value_string(&value, "/indexStatusResult/googleCanonical");
+                let sitemap_count = array_len_at(&value, "/indexStatusResult/sitemap");
+                let canonical_mismatch = match (&user_canonical, &google_canonical) {
+                    (Some(user), Some(google)) => {
+                        !user.is_empty() && !google.is_empty() && user != google
+                    }
+                    _ => false,
+                };
+                let indexed = verdict == "PASS";
+                let robots_blocked = robots_txt_state.contains("DISALLOWED");
+                let fetch_failed = page_fetch_state != "PAGE_FETCH_STATE_SUCCESSFUL"
+                    && page_fetch_state != "PAGE_FETCH_STATE_UNSPECIFIED";
+                let stale = last_crawl_time
+                    .as_deref()
+                    .and_then(parse_rfc3339_millis)
+                    .map(|time| now.saturating_sub(time) > 90 * 86_400_000)
+                    .unwrap_or(false);
+                let mobile_issues = array_len_at(&value, "/mobileUsabilityResult/issues");
+                let mobile_failed = mobile_issues > 0
+                    || value_string(&value, "/mobileUsabilityResult/verdict").as_deref()
+                        == Some("FAIL");
+                let rich_issues = rich_issue_count(&value);
+                let rich_failed = rich_issues > 0
+                    || value_string(&value, "/richResultsResult/verdict").as_deref()
+                        == Some("FAIL");
+
+                if indexed {
+                    indexing.indexed += 1;
+                } else {
+                    indexing.not_indexed += 1;
+                }
+                indexing.inspected += 1;
+                if canonical_mismatch {
+                    indexing.canonical_mismatches += 1;
+                }
+                if robots_blocked {
+                    indexing.robots_blocked += 1;
+                }
+                if fetch_failed {
+                    indexing.fetch_failed += 1;
+                }
+                if stale {
+                    indexing.stale += 1;
+                }
+                if mobile_failed {
+                    indexing.mobile_issue_pages += 1;
+                }
+                if rich_failed {
+                    indexing.rich_issue_pages += 1;
+                }
+
+                let mut issues = Vec::new();
+                if !indexed {
+                    issues.push(format!("Not indexed ({coverage_state})"));
+                }
+                if canonical_mismatch {
+                    issues.push("Canonical mismatch".to_string());
+                }
+                if robots_blocked {
+                    issues.push("Blocked by robots.txt".to_string());
+                }
+                if fetch_failed {
+                    issues.push("Page fetch was not successful".to_string());
+                }
+                if stale {
+                    issues.push("Last crawl was over 90 days ago".to_string());
+                }
+                if mobile_failed {
+                    issues.push(if mobile_issues > 0 {
+                        format!("{mobile_issues} mobile usability issue(s)")
+                    } else {
+                        "Mobile usability check failed".to_string()
+                    });
+                }
+                if rich_failed {
+                    issues.push(if rich_issues > 0 {
+                        format!("{rich_issues} rich result issue(s)")
+                    } else {
+                        "Rich results check failed".to_string()
+                    });
+                }
+
+                let metrics = page_metrics.get(url);
+                indexing.items.push(IndexingItem {
+                    url: url.clone(),
+                    verdict,
+                    coverage_state,
+                    indexing_state,
+                    last_crawl_time,
+                    page_fetch_state,
+                    robots_txt_state,
+                    crawled_as,
+                    user_canonical,
+                    google_canonical,
+                    canonical_mismatch,
+                    sitemap_count,
+                    mobile_issues,
+                    rich_issues,
+                    impressions: metrics.map(|row| row.impressions).unwrap_or_default(),
+                    clicks: metrics.map(|row| row.clicks).unwrap_or_default(),
+                    issue: issues.join("; "),
+                });
+            }
+            Err(error) => {
+                indexing.failed += 1;
+                consecutive_failures += 1;
+                if indexing.errors.len() < 3 {
+                    indexing.errors.push(format!("{url}: {error}"));
+                }
+                if consecutive_failures >= 3 {
+                    break;
+                }
+            }
+        }
+    }
+    indexing.items.sort_by(|left, right| {
+        left.issue
+            .is_empty()
+            .cmp(&right.issue.is_empty())
+            .then_with(|| {
+                right
+                    .impressions
+                    .partial_cmp(&left.impressions)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+
+    let clicks_change = percent_change(overview_current.clicks, overview_previous.clicks);
+    let impressions_change =
+        percent_change(overview_current.impressions, overview_previous.impressions);
+    let ctr_change = (overview_current.ctr - overview_previous.ctr) * 100.0;
+    let position_change = overview_current.position - overview_previous.position;
+
+    let sitemap_issue_count =
+        sitemap_audit.errors + sitemap_audit.warnings + sitemap_audit.pending + sitemap_audit.stale;
+    let mut checks = Vec::new();
+    checks.push(AuditCheck {
+        id: "visibility".to_string(),
+        title: "Search visibility".to_string(),
+        status: if impressions_change <= -40.0 {
+            "fail"
+        } else if impressions_change <= -20.0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: 0,
+        description: format!(
+            "Impressions {} {:.1}% versus the previous period.",
+            if impressions_change < 0.0 {
+                "fell"
+            } else {
+                "changed"
+            },
+            impressions_change.abs()
+        ),
+    });
+    checks.push(AuditCheck {
+        id: "indexing".to_string(),
+        title: "Indexing & crawl".to_string(),
+        status: if indexing.not_indexed > 0
+            || indexing.robots_blocked > 0
+            || indexing.fetch_failed > 0
+        {
+            "fail"
+        } else if indexing.failed > 0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: indexing.not_indexed + indexing.robots_blocked + indexing.fetch_failed,
+        description: format!(
+            "{} of {} inspected pages are indexed. {} inspection(s) failed.",
+            indexing.indexed, indexing.inspected, indexing.failed
+        ),
+    });
+    checks.push(AuditCheck {
+        id: "canonical".to_string(),
+        title: "Canonical URLs".to_string(),
+        status: if indexing.canonical_mismatches > 0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: indexing.canonical_mismatches,
+        description: if indexing.canonical_mismatches > 0 {
+            "Google selected a different canonical than the page declares.".to_string()
+        } else {
+            "No canonical differences were found in the inspected sample.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "crawl-freshness".to_string(),
+        title: "Crawl freshness".to_string(),
+        status: if indexing.stale > 0 { "warn" } else { "pass" }.to_string(),
+        count: indexing.stale,
+        description: if indexing.stale > 0 {
+            "Some sampled pages have not been crawled in the last 90 days.".to_string()
+        } else {
+            "The inspected sample was crawled recently.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "mobile".to_string(),
+        title: "Mobile usability".to_string(),
+        status: if indexing.mobile_issue_pages > 0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: indexing.mobile_issue_pages,
+        description: if indexing.mobile_issue_pages > 0 {
+            "Inspected pages have mobile usability issues.".to_string()
+        } else {
+            "No mobile usability issues were reported for the inspected sample.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "rich-results".to_string(),
+        title: "Rich results".to_string(),
+        status: if indexing.rich_issue_pages > 0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: indexing.rich_issue_pages,
+        description: if indexing.rich_issue_pages > 0 {
+            "Inspected pages have rich result warnings or errors.".to_string()
+        } else {
+            "No rich result issues were reported for the inspected sample.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "sitemaps".to_string(),
+        title: "Sitemaps".to_string(),
+        status: if sitemap_audit.errors > 0 {
+            "fail"
+        } else if sitemap_issue_count > 0 {
+            "warn"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        count: sitemap_audit.issues.len(),
+        description: if sitemap_issue_count > 0 {
+            format!(
+                "{} sitemap issue(s) across {} submitted sitemaps.",
+                sitemap_audit.issues.len(),
+                sitemap_audit.total
+            )
+        } else {
+            format!("{} submitted sitemaps look healthy.", sitemap_audit.total)
+        },
+    });
+    checks.push(AuditCheck {
+        id: "ctr".to_string(),
+        title: "CTR opportunities".to_string(),
+        status: if ctr_opportunities.is_empty() {
+            "pass"
+        } else {
+            "warn"
+        }
+        .to_string(),
+        count: ctr_opportunities.len(),
+        description: if ctr_opportunities.is_empty() {
+            "No large CTR gaps were found for top-10 results.".to_string()
+        } else {
+            "Some pages or queries earn much less CTR than the site average for their position."
+                .to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "striking-distance".to_string(),
+        title: "Striking distance".to_string(),
+        status: if striking_distance.is_empty() {
+            "pass"
+        } else {
+            "info"
+        }
+        .to_string(),
+        count: striking_distance.len(),
+        description: if striking_distance.is_empty() {
+            "No page 1-2 queries were found outside the top five.".to_string()
+        } else {
+            "Queries rank on page 1-2 but below the top five and could be improved.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "declining".to_string(),
+        title: "Declining content".to_string(),
+        status: if declining.is_empty() { "pass" } else { "warn" }.to_string(),
+        count: declining.len(),
+        description: if declining.is_empty() {
+            "No pages or queries lost at least 20% of clicks or impressions.".to_string()
+        } else {
+            "Pages or queries lost at least 20% of clicks or impressions versus the previous period."
+                .to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "cannibalization".to_string(),
+        title: "Keyword cannibalization".to_string(),
+        status: if cannibalization.is_empty() {
+            "pass"
+        } else {
+            "warn"
+        }
+        .to_string(),
+        count: cannibalization.len(),
+        description: if cannibalization.is_empty() {
+            "No queries with multiple competing pages were found.".to_string()
+        } else {
+            "Multiple pages compete for the same queries.".to_string()
+        },
+    });
+    checks.push(AuditCheck {
+        id: "device-gap".to_string(),
+        title: "Mobile vs desktop rankings".to_string(),
+        status: if device_gap.is_empty() {
+            "pass"
+        } else {
+            "warn"
+        }
+        .to_string(),
+        count: device_gap.len(),
+        description: if device_gap.is_empty() {
+            "Mobile and desktop positions are broadly aligned.".to_string()
+        } else {
+            "Some pages rank noticeably worse on mobile than on desktop.".to_string()
+        },
+    });
+
+    Ok(SeoAuditReport {
+        generated_at: now,
+        data_start: start_date,
+        data_end: end_date,
+        previous_start,
+        previous_end,
+        search_type,
+        min_impressions,
+        inspect_limit,
+        overview: SeoOverview {
+            current: overview_current,
+            previous: overview_previous,
+            clicks_change,
+            impressions_change,
+            ctr_change,
+            position_change,
+        },
+        checks,
+        sitemaps: sitemap_audit,
+        ctr_opportunities,
+        striking_distance,
+        declining,
+        cannibalization,
+        device_gap,
+        search_appearance,
+        indexing,
+    })
 }
 
 const LIGHTHOUSE_METRICS: [&str; 7] = [
@@ -1588,6 +2806,7 @@ pub fn run() {
             submit_sitemap,
             delete_sitemap,
             inspect_url,
+            run_seo_audit,
             check_lighthouse_environment,
             run_lighthouse,
             run_pagespeed
@@ -1652,6 +2871,26 @@ mod tests {
         assert!(
             inspection.get("indexStatusResult").is_some(),
             "URL inspection response did not include an index status result"
+        );
+        let audit = super::run_seo_audit(
+            site_url.to_string(),
+            "2026-10-19".to_string(),
+            "2026-11-15".to_string(),
+            "2026-09-21".to_string(),
+            "2026-10-18".to_string(),
+            "web".to_string(),
+            Some(100.0),
+            Some(3),
+        )
+        .await
+        .expect("service account could not run the SEO audit");
+        assert!(
+            !audit.checks.is_empty(),
+            "SEO audit did not return any checks"
+        );
+        assert!(
+            audit.indexing.inspected > 0,
+            "SEO audit did not inspect any pages"
         );
     }
 }

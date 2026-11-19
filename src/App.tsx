@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
+import SeoAudit from "./SeoAudit";
 import "./App.css";
 
-type Page = "overview" | "performance" | "inspection" | "sitemaps" | "vitals";
+type Page = "overview" | "performance" | "inspection" | "seoaudit" | "sitemaps" | "vitals";
 type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | "date";
 type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
@@ -202,6 +203,12 @@ const navGroups = [
     ],
   },
   {
+    title: "Audits",
+    items: [
+      ["seoaudit", "insights", "SEO audit"],
+    ],
+  },
+  {
     title: "Indexing",
     items: [
       ["pages", "pages", "Pages"],
@@ -366,7 +373,7 @@ function Sidebar({
   onAddAccount: () => void;
 }) {
   const navigate = (key: string) => {
-    if (key === "overview" || key === "performance" || key === "inspection" || key === "sitemaps" || key === "vitals") onNavigate(key);
+    if (key === "overview" || key === "performance" || key === "inspection" || key === "seoaudit" || key === "sitemaps" || key === "vitals") onNavigate(key);
   };
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -2140,7 +2147,7 @@ function App() {
   useEffect(() => { void loadSites(); }, [loadSites]);
   useEffect(() => {
     if (!selectedSite) return;
-    if (page === "vitals" || page === "inspection") return;
+    if (page === "vitals" || page === "inspection" || page === "seoaudit") return;
     if (page === "sitemaps") void loadSitemaps();
     else {
       void loadPerformance();
@@ -2174,6 +2181,7 @@ function App() {
             page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
                 page === "inspection" ? <UrlInspection siteUrl={selectedSite.siteUrl} /> :
+                page === "seoaudit" ? <SeoAudit siteUrl={selectedSite.siteUrl} /> :
                 page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>
