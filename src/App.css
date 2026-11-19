@@ -313,6 +313,20 @@ td { font-size: 13px; }
 
 .cwv-content { width: min(1180px, calc(100% - 48px)); margin: 24px auto 48px; display: flex; flex-direction: column; gap: 18px; }
 .cwv-runner { padding: 20px 22px 16px; }
+.cwv-source-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.cwv-source-row > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.cwv-source-row > div:first-child span { color: #202124; font-size: 13px; font-weight: 500; }
+.cwv-source-row > div:first-child small { color: #5f6368; font-size: 11px; }
+.cwv-source-toggle { height: 38px; display: flex; }
+.cwv-source-toggle button { min-width: 140px; height: 38px; padding: 0 16px; border: 1px solid #747775; background: white; color: #3c4043; font-size: 12px; cursor: pointer; }
+.cwv-source-toggle button:first-child { border-radius: 9px 0 0 9px; }
+.cwv-source-toggle button:last-child { border-left: 0; border-radius: 0 9px 9px 0; }
+.cwv-source-toggle button.selected { background: #c2e7ff; border-color: #0b57d0; color: #003355; font-weight: 500; }
+.cwv-source-toggle button:disabled:not(.selected) { border-color: #dadce0; background: #f5f6f7; color: #9aa0a6; cursor: not-allowed; }
+.cwv-environment-notice { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 16px; padding: 11px 13px; border: 1px solid #f4d175; border-radius: 9px; background: #fef7e0; color: #684f00; }
+.cwv-environment-notice > span { width: 19px; height: 19px; flex: none; display: grid; place-items: center; border-radius: 50%; background: #f9ab00; color: white; font-size: 11px; font-weight: 700; }
+.cwv-environment-notice p { margin: 0; font-size: 11.5px; line-height: 1.5; }
+.cwv-environment-notice b { display: block; font-size: 12px; }
 .cwv-runner-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
 .cwv-url-field { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .cwv-url-field label { color: #5f6368; font-size: 12px; }
@@ -441,6 +455,9 @@ td { font-size: 13px; }
 @media (max-width: 820px) {
   .cwv-content { width: calc(100% - 32px); margin: 16px auto 32px; }
   .cwv-runner { padding: 16px; }
+  .cwv-source-row { align-items: stretch; flex-direction: column; }
+  .cwv-source-toggle { width: 100%; }
+  .cwv-source-toggle button { min-width: 0; flex: 1; padding-inline: 8px; }
   .cwv-run { width: 100%; }
   .cwv-overview { padding: 20px 16px 0; }
   .cwv-overview-top { gap: 20px; }

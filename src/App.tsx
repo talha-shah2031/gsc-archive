@@ -9,6 +9,7 @@ type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | 
 type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
 type MetricKey = "clicks" | "impressions" | "ctr" | "position";
+type AuditSource = "lighthouse" | "pagespeed";
 
 interface PerformanceFilter {
   dimension: Exclude<Dimension, "date">;
@@ -121,6 +122,13 @@ interface LighthouseReport {
   audits: LighthouseAudit[];
   passed: PassedAudit[];
   warnings: string[];
+}
+
+interface LighthouseEnvironment {
+  nodeInstalled: boolean;
+  browserInstalled: boolean;
+  localCliAvailable: boolean;
+  localAvailable: boolean;
 }
 
 const navGroups = [
@@ -587,10 +595,10 @@ function Skeleton({ variant }: { variant: "boot" | "overview" | "performance" | 
   );
 }
 
-function ErrorCard({ error, retry }: { error: string; retry: () => void }) {
+function ErrorCard({ error, retry, title = "Search Console data couldn't be loaded" }: { error: string; retry: () => void; title?: string }) {
   return (
     <div className="error-card">
-      <b>Search Console data couldn't be loaded</b>
+      <b>{title}</b>
       <p>{error}</p>
       <button onClick={retry}>Try again</button>
     </div>
@@ -1189,13 +1197,14 @@ function ScoreRing({ score, label, size = 96 }: { score?: number | null; label: 
 function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
   const [url, setUrl] = useState(siteOrigin(siteUrl));
   const [strategy, setStrategy] = useState<"mobile" | "desktop">("mobile");
+  const [source, setSource] = useState<AuditSource>();
+  const [environment, setEnvironment] = useState<LighthouseEnvironment>();
+  const [environmentError, setEnvironmentError] = useState(false);
   const [report, setReport] = useState<LighthouseReport>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedAudit, setExpandedAudit] = useState<string>();
   const [showAllPassed, setShowAllPassed] = useState(false);
-  const autoRun = useRef("");
-  const siteKey = useRef(siteUrl);
   const requestId = useRef(0);
 
   async function analyze(force = false) {
@@ -1204,11 +1213,17 @@ function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
       setError("Enter a page URL to audit.");
       return;
     }
+    if (!source) return;
+    if (source === "lighthouse" && !environment?.localAvailable) {
+      setError("Local Lighthouse is unavailable. Use PageSpeed Insights instead.");
+      return;
+    }
     const id = ++requestId.current;
     setLoading(true);
     setError("");
     try {
-      const result = await invoke<LighthouseReport>("run_lighthouse", { url: target, strategy, force });
+      const command = source === "lighthouse" ? "run_lighthouse" : "run_pagespeed";
+      const result = await invoke<LighthouseReport>(command, { url: target, strategy, force });
       if (id !== requestId.current) return;
       setReport(result);
       setExpandedAudit(undefined);
@@ -1223,22 +1238,43 @@ function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
   }
 
   useEffect(() => {
+    let active = true;
+    void invoke<LighthouseEnvironment>("check_lighthouse_environment")
+      .then((result) => {
+        if (!active) return;
+        setEnvironment(result);
+        setEnvironmentError(false);
+        setSource(result.localAvailable ? "lighthouse" : "pagespeed");
+      })
+      .catch(() => {
+        if (!active) return;
+        setEnvironmentError(true);
+        setSource("pagespeed");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     requestId.current += 1;
     setUrl(siteOrigin(siteUrl));
     setReport(undefined);
     setError("");
     setLoading(false);
-    siteKey.current = siteUrl;
   }, [siteUrl]);
 
-  useEffect(() => {
-    const key = `${siteKey.current}|${strategy}`;
-    if (autoRun.current === key) return;
-    autoRun.current = key;
-    void analyze();
-    // Only auto-run once per property and strategy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategy]);
+  const localUnavailableMessage = environmentError
+    ? "Local Lighthouse could not be detected. PageSpeed Insights has been selected."
+    : environment && !environment.localAvailable
+      ? !environment.nodeInstalled && !environment.browserInstalled
+        ? "Node.js and Chrome or Edge are not installed. Use PageSpeed Insights to audit this page."
+        : !environment.nodeInstalled
+          ? "Node.js is not installed. Use PageSpeed Insights, or install Node.js to run Lighthouse locally."
+          : !environment.browserInstalled
+            ? "Chrome or Edge is not installed. Use PageSpeed Insights, or install a supported browser for local Lighthouse."
+            : "The local Lighthouse CLI is unavailable. PageSpeed Insights has been selected."
+      : "";
 
   const performanceCategory = report?.categories.find((category) => category.id === "performance");
   const metricTiles = report
@@ -1263,6 +1299,43 @@ function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
       </div>
       <div className="cwv-content">
         <section className="card cwv-runner">
+          <div className="cwv-source-row">
+            <div>
+              <span>Audit source</span>
+              <small>{source === "lighthouse" ? "Runs on this computer" : "Runs on Google's servers"}</small>
+            </div>
+            <div className="cwv-source-toggle" role="group" aria-label="Audit source">
+              <button
+                className={source === "lighthouse" ? "selected" : ""}
+                disabled={!environment?.localAvailable || loading}
+                title={!environment?.localAvailable ? "Node.js, Chrome or Edge, and Lighthouse CLI are required" : ""}
+                onClick={() => {
+                  setSource("lighthouse");
+                  setReport(undefined);
+                  setError("");
+                }}
+              >
+                Lighthouse CLI
+              </button>
+              <button
+                className={source === "pagespeed" ? "selected" : ""}
+                disabled={!source || loading}
+                onClick={() => {
+                  setSource("pagespeed");
+                  setReport(undefined);
+                  setError("");
+                }}
+              >
+                PageSpeed Insights
+              </button>
+            </div>
+          </div>
+          {localUnavailableMessage && (
+            <div className="cwv-environment-notice">
+              <span>!</span>
+              <p><b>Local Lighthouse unavailable</b>{localUnavailableMessage}</p>
+            </div>
+          )}
           <div className="cwv-runner-row">
             <div className="cwv-url-field">
               <label htmlFor="cwv-url">Page URL</label>
@@ -1299,19 +1372,21 @@ function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
                 Desktop
               </button>
             </div>
-            <button className="cwv-run" onClick={() => void analyze()} disabled={loading || !url.trim()}>
+            <button className="cwv-run" onClick={() => void analyze()} disabled={loading || !url.trim() || !source}>
               {loading ? <><span className="cwv-spinner" />Auditing…</> : report ? "Re-run audit" : "Analyze page"}
             </button>
           </div>
           <p className="cwv-runner-note">
-            Lighthouse audits the page in a headless Chrome browser. This is a single lab run, not field data collected from real visitors. The audit requires Node.js and Chrome or Edge to be installed.
+            {source === "lighthouse"
+              ? "Lighthouse CLI audits the page in a local headless browser. This is a single lab run, not field data collected from real visitors."
+              : "PageSpeed Insights audits public pages on Google's servers. No local Node.js or browser installation is required."}
           </p>
         </section>
 
-        {loading ? <Skeleton variant="vitals" /> : error ? <ErrorCard error={error} retry={() => void analyze()} /> : !report ? (
+        {loading ? <Skeleton variant="vitals" /> : error ? <ErrorCard title="The audit couldn't be completed" error={error} retry={() => void analyze()} /> : !report ? (
           <section className="card cwv-empty">
             <div className="cwv-empty-icon">⚡</div>
-            <h2>Audit any page with Lighthouse</h2>
+            <h2>Audit any public page</h2>
             <p>Enter a URL above and run the audit to see performance scores, Core Web Vitals, savings opportunities and diagnostics.</p>
             <button className="cwv-run" onClick={() => void analyze()} disabled={loading}>Analyze page</button>
           </section>
@@ -1325,7 +1400,7 @@ function CoreWebVitals({ siteUrl }: { siteUrl: string }) {
                   ))}
                 </div>
                 <div className="cwv-verdict">
-                  <span className="cwv-chip">Lab audit</span>
+                  <span className="cwv-chip">{source === "pagespeed" ? "PageSpeed Insights" : "Local Lighthouse"} · Lab audit</span>
                   <h2>{performanceCategory ? ratingLabel(scoreRating(performanceCategory.score)) : "Report ready"}</h2>
                   <p>{report.finalUrl || report.requestedUrl}</p>
                   <span className="cwv-verdict-detail">

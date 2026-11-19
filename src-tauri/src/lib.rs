@@ -1,16 +1,19 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tauri::Manager;
-use yup_oauth2::{read_service_account_key, ServiceAccountAuthenticator, ServiceAccountKey};
+use tokio::sync::RwLock;
+use yup_oauth2::{ServiceAccountAuthenticator, ServiceAccountKey, read_service_account_key};
 use zeroize::Zeroizing;
 
 const SCOPE: &str = "https://www.googleapis.com/auth/webmasters.readonly";
+const PAGESPEED_SCOPE: &str = "openid";
 const API_ROOT: &str = "https://searchconsole.googleapis.com/webmasters/v3";
+const PAGESPEED_API: &str =
+    "https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 struct CacheEntry {
@@ -55,7 +58,9 @@ async fn read_credential_index() -> Result<CredentialIndex, String> {
     match tokio::fs::read(path).await {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map_err(|error| format!("The credential index is damaged: {error}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CredentialIndex::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(CredentialIndex::default())
+        }
         Err(error) => Err(format!("Could not read the credential index: {error}")),
     }
 }
@@ -86,7 +91,7 @@ async fn write_credential_index(index: &CredentialIndex) -> Result<(), String> {
 fn protect_secret(data: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData,
     };
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
@@ -122,7 +127,7 @@ fn protect_secret(data: &[u8]) -> Result<Vec<u8>, String> {
 fn unprotect_secret(data: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
     };
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
@@ -286,12 +291,19 @@ async fn active_service_account_key() -> Result<ServiceAccountKey, String> {
 }
 
 async fn access_token_for_key(key: ServiceAccountKey) -> Result<String, String> {
+    access_token_for_key_with_scopes(key, &[SCOPE]).await
+}
+
+async fn access_token_for_key_with_scopes(
+    key: ServiceAccountKey,
+    scopes: &[&str],
+) -> Result<String, String> {
     let auth = ServiceAccountAuthenticator::builder(key)
         .build()
         .await
         .map_err(|error| format!("Unable to initialize Google authentication: {error}"))?;
     let token = auth
-        .token(&[SCOPE])
+        .token(scopes)
         .await
         .map_err(|error| format!("Google authentication failed: {error}"))?;
     token
@@ -418,7 +430,9 @@ async fn import_service_account(path: String) -> Result<CredentialProfile, Strin
         || !key.private_key.contains("BEGIN PRIVATE KEY")
         || key.token_uri != "https://oauth2.googleapis.com/token"
     {
-        return Err("The selected JSON does not contain a valid Google service account".to_string());
+        return Err(
+            "The selected JSON does not contain a valid Google service account".to_string(),
+        );
     }
     let token = access_token_for_key(key.clone()).await?;
     let sites = list_sites_with_token(&token).await?;
@@ -568,8 +582,24 @@ async fn get_performance(
         _ => None,
     };
     let (summary, daily, rows) = tokio::join!(
-        analytics_query(&site_url, &start_date, &end_date, vec![], 1, &search_type, filter),
-        analytics_query(&site_url, &start_date, &end_date, vec!["date"], 5000, &search_type, filter),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec![],
+            1,
+            &search_type,
+            filter
+        ),
+        analytics_query(
+            &site_url,
+            &start_date,
+            &end_date,
+            vec!["date"],
+            5000,
+            &search_type,
+            filter
+        ),
         analytics_query(
             &site_url,
             &start_date,
@@ -663,9 +693,8 @@ async fn get_recommendations(
                     "A page recently got {} impressions than usual",
                     if increased { "more" } else { "fewer" }
                 ),
-                description:
-                    "Based on the last 7 finalized days compared with the previous 7 days"
-                        .to_string(),
+                description: "Based on the last 7 finalized days compared with the previous 7 days"
+                    .to_string(),
                 page,
                 change_percent: percent.round() as i64,
             }
@@ -747,6 +776,15 @@ struct LighthouseReport {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LighthouseEnvironment {
+    node_installed: bool,
+    browser_installed: bool,
+    local_cli_available: bool,
+    local_available: bool,
+}
+
 fn shorten(text: &str, limit: usize) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= limit {
@@ -824,13 +862,7 @@ fn trim_lighthouse_details(details: &Value) -> Option<Value> {
     let items: Vec<Value> = details
         .get("items")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .take(10)
-                .map(trim_lighthouse_item)
-                .collect()
-        })
+        .map(|items| items.iter().take(10).map(trim_lighthouse_item).collect())
         .unwrap_or_default();
     Some(json!({ "type": kind, "headings": headings, "items": items }))
 }
@@ -928,7 +960,10 @@ fn parse_lighthouse_report(
                 id: id.clone(),
                 title,
                 description: shorten(
-                    audit.get("description").and_then(Value::as_str).unwrap_or(""),
+                    audit
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
                     500,
                 ),
                 score,
@@ -970,7 +1005,10 @@ fn parse_lighthouse_report(
             id: id.clone(),
             title,
             description: shorten(
-                audit.get("description").and_then(Value::as_str).unwrap_or(""),
+                audit
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
                 500,
             ),
             score,
@@ -1111,17 +1149,18 @@ fn chrome_path() -> Option<String> {
     }
     #[cfg(windows)]
     {
-        let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut chrome_candidates: Vec<PathBuf> = Vec::new();
+        let mut edge_candidates: Vec<PathBuf> = Vec::new();
         for variable in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
             if let Ok(root) = std::env::var(variable) {
-                candidates.push(
+                chrome_candidates.push(
                     PathBuf::from(&root)
                         .join("Google")
                         .join("Chrome")
                         .join("Application")
                         .join("chrome.exe"),
                 );
-                candidates.push(
+                edge_candidates.push(
                     PathBuf::from(&root)
                         .join("Microsoft")
                         .join("Edge")
@@ -1130,7 +1169,10 @@ fn chrome_path() -> Option<String> {
                 );
             }
         }
-        for candidate in candidates {
+        for candidate in chrome_candidates
+            .into_iter()
+            .chain(edge_candidates.into_iter())
+        {
             if candidate.is_file() {
                 return Some(candidate.to_string_lossy().into_owned());
             }
@@ -1139,14 +1181,49 @@ fn chrome_path() -> Option<String> {
     None
 }
 
-async fn run_lighthouse_cli(url: &str, strategy: &str) -> Result<Value, String> {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let output_path = std::env::temp_dir().join(format!("gsc-studio-lighthouse-{stamp}.json"));
-    let chrome_flags = "--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage";
+async fn command_available(program: &str, argument: &str) -> bool {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .arg(argument)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    matches!(
+        tokio::time::timeout(Duration::from_secs(5), command.status()).await,
+        Ok(Ok(status)) if status.success()
+    )
+}
 
+#[tauri::command]
+async fn check_lighthouse_environment() -> LighthouseEnvironment {
+    let node_installed = command_available("node", "--version").await;
+    let browser_installed = chrome_path().is_some();
+    let bundled_cli = lighthouse_cli_path().is_some();
+    let npx_available = if bundled_cli || !node_installed {
+        false
+    } else if cfg!(windows) {
+        command_available("npx.cmd", "--version").await
+    } else {
+        command_available("npx", "--version").await
+    };
+    let local_cli_available = bundled_cli || npx_available;
+    LighthouseEnvironment {
+        node_installed,
+        browser_installed,
+        local_cli_available,
+        local_available: node_installed && browser_installed && local_cli_available,
+    }
+}
+
+fn lighthouse_command(
+    url: &str,
+    strategy: &str,
+    output_path: &Path,
+    debugging_port: u16,
+) -> tokio::process::Command {
+    let chrome_flags = "--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage";
     let mut command = match lighthouse_cli_path() {
         Some(cli) => {
             let mut command = tokio::process::Command::new("node");
@@ -1177,6 +1254,7 @@ async fn run_lighthouse_cli(url: &str, strategy: &str) -> Result<Value, String> 
         .arg("--output=json")
         .arg(format!("--output-path={}", output_path.display()))
         .arg(format!("--chrome-flags={chrome_flags}"))
+        .arg(format!("--port={debugging_port}"))
         .arg("--only-categories=performance,accessibility,best-practices,seo")
         .arg("--max-wait-for-load=45000")
         .arg("--quiet")
@@ -1189,36 +1267,75 @@ async fn run_lighthouse_cli(url: &str, strategy: &str) -> Result<Value, String> 
     }
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
+    command
+}
 
-    let output = match tokio::time::timeout(Duration::from_secs(240), command.output()).await {
-        Err(_) => {
-            let _ = tokio::fs::remove_file(&output_path).await;
-            return Err("The Lighthouse audit timed out after 4 minutes".to_string());
-        }
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err("Lighthouse needs Node.js and Chrome. Install Node.js or set LIGHTHOUSE_CLI_PATH to the Lighthouse CLI file.".to_string());
-        }
-        Ok(Err(error)) => {
-            return Err(format!("Lighthouse could not start: {error}"));
-        }
-        Ok(Ok(output)) => output,
-    };
+fn lighthouse_error_message(stderr: &str) -> &str {
+    stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("at ")
+                && !line.starts_with("file:")
+                && !line.starts_with('(')
+        })
+        .or_else(|| stderr.lines().map(str::trim).find(|line| !line.is_empty()))
+        .unwrap_or("Lighthouse could not audit this page")
+}
 
-    if !output.status.success() {
+async fn run_lighthouse_cli(url: &str, strategy: &str) -> Result<Value, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let output_path = std::env::temp_dir().join(format!("gsc-studio-lighthouse-{stamp}.json"));
+
+    let mut attempt = 0;
+    loop {
         let _ = tokio::fs::remove_file(&output_path).await;
+        let debugging_port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .and_then(|listener| listener.local_addr())
+            .map(|address| address.port())
+            .map_err(|error| format!("Could not reserve a Chrome debugging port: {error}"))?;
+        let mut command = lighthouse_command(url, strategy, &output_path, debugging_port);
+        let output = match tokio::time::timeout(Duration::from_secs(240), command.output()).await {
+            Err(_) => {
+                let _ = tokio::fs::remove_file(&output_path).await;
+                return Err("The Lighthouse audit timed out after 4 minutes".to_string());
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err("Lighthouse needs Node.js and Chrome. Install Node.js or set LIGHTHOUSE_CLI_PATH to the Lighthouse CLI file.".to_string());
+            }
+            Ok(Err(error)) => {
+                return Err(format!("Lighthouse could not start: {error}"));
+            }
+            Ok(Ok(output)) => output,
+        };
+        if output.status.success() {
+            break;
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let message = stderr
-            .lines()
-            .rev()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("Lighthouse could not audit this page");
-        return Err(format!("Lighthouse failed: {}", shorten(message, 300)));
+        let launcher_failed = stderr.contains("ChromeLauncher")
+            || stderr.contains("at poll")
+            || stderr.contains("waiting for dynamic debugging port")
+            || stderr.contains("Unable to connect to Chrome")
+            || stderr.contains("browser process has unexpectedly exited");
+        if attempt == 0 && launcher_failed {
+            attempt += 1;
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            continue;
+        }
+        let _ = tokio::fs::remove_file(&output_path).await;
+        return Err(format!(
+            "Lighthouse failed: {}",
+            shorten(lighthouse_error_message(&stderr), 300)
+        ));
     }
 
-    let bytes = tokio::fs::read(&output_path).await.map_err(|error| {
-        format!("Lighthouse did not produce a report for this page: {error}")
-    })?;
+    let bytes = tokio::fs::read(&output_path)
+        .await
+        .map_err(|error| format!("Lighthouse did not produce a report for this page: {error}"))?;
     let _ = tokio::fs::remove_file(&output_path).await;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("Could not decode the Lighthouse report: {error}"))
@@ -1257,6 +1374,79 @@ async fn run_lighthouse(
     }
     Ok(report)
 }
+
+#[tauri::command]
+async fn run_pagespeed(
+    url: String,
+    strategy: String,
+    force: bool,
+) -> Result<LighthouseReport, String> {
+    let url = url.trim().to_string();
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|_| "Enter a valid URL, for example https://example.com".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http and https pages can be audited".to_string());
+    }
+    let strategy = if strategy == "desktop" {
+        "desktop"
+    } else {
+        "mobile"
+    };
+    let cache_key = format!("PAGESPEED:{strategy}:{url}");
+    if !force {
+        if let Some(value) = read_cache(&cache_key).await {
+            if let Ok(report) = serde_json::from_value::<LighthouseReport>(value) {
+                return Ok(report);
+            }
+        }
+    }
+
+    let key = active_service_account_key().await?;
+    let quota_project = key
+        .project_id
+        .clone()
+        .ok_or_else(|| "The service-account JSON does not contain a project ID".to_string())?;
+    let token = access_token_for_key_with_scopes(key, &[PAGESPEED_SCOPE]).await?;
+    let started = Instant::now();
+    let response = reqwest::Client::new()
+        .get(PAGESPEED_API)
+        .bearer_auth(token)
+        .header("x-goog-user-project", quota_project)
+        .query(&[
+            ("url", url.as_str()),
+            ("strategy", strategy),
+            ("category", "performance"),
+            ("category", "accessibility"),
+            ("category", "best-practices"),
+            ("category", "seo"),
+        ])
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach PageSpeed Insights: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read PageSpeed Insights response: {error}"))?;
+    if !status.is_success() {
+        let detail = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| value.pointer("/error/message")?.as_str().map(str::to_owned))
+            .unwrap_or(body);
+        return Err(format!("PageSpeed Insights returned {status}: {detail}"));
+    }
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid response from PageSpeed Insights: {error}"))?;
+    let raw = value
+        .get("lighthouseResult")
+        .ok_or_else(|| "PageSpeed Insights did not return a Lighthouse report".to_string())?;
+    let report = parse_lighthouse_report(raw, strategy, started.elapsed().as_millis() as u64)?;
+    if let Ok(value) = serde_json::to_value(&report) {
+        write_cache(cache_key, value).await;
+    }
+    Ok(report)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1276,7 +1466,9 @@ pub fn run() {
             get_performance,
             get_recommendations,
             list_sitemaps,
-            run_lighthouse
+            check_lighthouse_environment,
+            run_lighthouse,
+            run_pagespeed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
