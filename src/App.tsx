@@ -4,7 +4,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
 import "./App.css";
 
-type Page = "overview" | "performance" | "sitemaps" | "vitals";
+type Page = "overview" | "performance" | "inspection" | "sitemaps" | "vitals";
 type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | "date";
 type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
@@ -67,6 +67,66 @@ interface Sitemap {
   warnings?: string;
   errors?: string;
   contents: SitemapContent[];
+}
+
+interface InspectionIssue {
+  severity?: string;
+  message?: string;
+  issueMessage?: string;
+  issueType?: string;
+}
+
+interface IndexStatusInspection {
+  verdict?: string;
+  coverageState?: string;
+  indexingState?: string;
+  lastCrawlTime?: string;
+  pageFetchState?: string;
+  robotsTxtState?: string;
+  crawledAs?: string;
+  userCanonical?: string;
+  googleCanonical?: string;
+  sitemap?: string[];
+  referringUrls?: string[];
+}
+
+interface MobileUsabilityInspection {
+  verdict?: string;
+  issues?: InspectionIssue[];
+}
+
+interface RichResultItem {
+  name?: string;
+  issues?: InspectionIssue[];
+}
+
+interface RichResultGroup {
+  richResultType?: string;
+  items?: RichResultItem[];
+}
+
+interface RichResultsInspection {
+  verdict?: string;
+  detectedItems?: RichResultGroup[];
+}
+
+interface AmpInspection {
+  verdict?: string;
+  ampUrl?: string;
+  ampIndexStatusVerdict?: string;
+  indexingState?: string;
+  pageFetchState?: string;
+  robotsTxtState?: string;
+  lastCrawlTime?: string;
+  issues?: InspectionIssue[];
+}
+
+interface UrlInspectionResult {
+  inspectionResultLink?: string;
+  indexStatusResult?: IndexStatusInspection;
+  mobileUsabilityResult?: MobileUsabilityInspection;
+  richResultsResult?: RichResultsInspection;
+  ampResult?: AmpInspection;
 }
 
 interface LighthouseCategory {
@@ -235,6 +295,17 @@ function formatDate(value?: string) {
   }).format(new Date(value));
 }
 
+function formatDateTime(value?: string) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 function Logo() {
   return (
     <div className="brand-mark" aria-hidden="true">
@@ -246,7 +317,7 @@ function Logo() {
   );
 }
 
-function Header({ site, sidebarOpen = true, onToggleSidebar }: { site?: Site; sidebarOpen?: boolean; onToggleSidebar?: () => void }) {
+function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site?: Site; sidebarOpen?: boolean; onToggleSidebar?: () => void; onInspect?: () => void }) {
   return (
     <header className="topbar">
       <button
@@ -256,7 +327,15 @@ function Header({ site, sidebarOpen = true, onToggleSidebar }: { site?: Site; si
         onClick={onToggleSidebar}
       >☰</button>
       <div className="brand"><Logo /><span>Google Search Console</span></div>
-      <div className="inspect-search">
+      <div
+        className="inspect-search"
+        role={onInspect ? "button" : undefined}
+        tabIndex={onInspect ? 0 : undefined}
+        onClick={onInspect}
+        onKeyDown={(event) => {
+          if (onInspect && (event.key === "Enter" || event.key === " ")) onInspect();
+        }}
+      >
         <AppIcon name="search" className="header-search-icon" />
         <span>Inspect any URL in "{site ? prettySite(site.siteUrl) : "your property"}"</span>
       </div>
@@ -287,7 +366,7 @@ function Sidebar({
   onAddAccount: () => void;
 }) {
   const navigate = (key: string) => {
-    if (key === "overview" || key === "performance" || key === "sitemaps" || key === "vitals") onNavigate(key);
+    if (key === "overview" || key === "performance" || key === "inspection" || key === "sitemaps" || key === "vitals") onNavigate(key);
   };
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -1043,41 +1122,414 @@ function Sitemaps({
   siteUrl: string;
 }) {
   const prefix = siteUrl.startsWith("sc-domain:") ? `https://${siteUrl.slice(10)}/` : siteUrl;
+  const [sitemapInput, setSitemapInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [actionPath, setActionPath] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
+  const [detailsPath, setDetailsPath] = useState("");
+  const [details, setDetails] = useState<Sitemap>();
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [pageNumber, setPageNumber] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(items.length / rowsPerPage));
+  const currentPage = Math.min(pageNumber, totalPages);
+  const start = (currentPage - 1) * rowsPerPage;
+  const visibleItems = items.slice(start, start + rowsPerPage);
+
+  useEffect(() => setPageNumber(1), [items.length, rowsPerPage, siteUrl]);
+
+  function fullSitemapUrl() {
+    const value = sitemapInput.trim();
+    if (!value) return "";
+    if (/^https?:\/\//i.test(value)) return value;
+    try {
+      return new URL(value.replace(/^\/+/, ""), prefix.endsWith("/") ? prefix : `${prefix}/`).toString();
+    } catch {
+      return value;
+    }
+  }
+
+  async function submit() {
+    const sitemapUrl = fullSitemapUrl();
+    if (!sitemapUrl) return;
+    setSubmitting(true);
+    setActionError("");
+    setActionSuccess("");
+    try {
+      await invoke("submit_sitemap", { siteUrl, sitemapUrl });
+      setSitemapInput("");
+      setActionSuccess("Sitemap submitted successfully.");
+      await retry();
+    } catch (reason) {
+      setActionError(String(reason));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function openDetails(item: Sitemap) {
+    setDetailsPath(item.path);
+    setDetails(undefined);
+    setDetailsLoading(true);
+    setActionError("");
+    try {
+      setDetails(await invoke<Sitemap>("get_sitemap", { siteUrl, sitemapUrl: item.path }));
+    } catch (reason) {
+      setActionError(String(reason));
+      setDetailsPath("");
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
+  async function remove(item: Sitemap) {
+    if (!window.confirm(`Delete this sitemap from Search Console?\n\n${item.path}`)) return;
+    setActionPath(item.path);
+    setActionError("");
+    setActionSuccess("");
+    try {
+      await invoke("delete_sitemap", { siteUrl, sitemapUrl: item.path });
+      setActionSuccess("Sitemap deleted successfully.");
+      if (detailsPath === item.path) {
+        setDetailsPath("");
+        setDetails(undefined);
+      }
+      await retry();
+    } catch (reason) {
+      setActionError(String(reason));
+    } finally {
+      setActionPath("");
+    }
+  }
+
   return (
     <>
       <div className="page-title"><h1>Sitemaps</h1></div>
       <div className="sitemap-content">
         <section className="card add-sitemap">
           <h2>Add a new sitemap</h2>
-          <div><span>{prefix}</span><input placeholder="Enter sitemap URL" disabled /><button disabled>SUBMIT</button></div>
-          <small>Submission is disabled because this app currently uses read-only access.</small>
+          <div>
+            <span>{prefix}</span>
+            <input
+              value={sitemapInput}
+              placeholder="sitemap.xml"
+              disabled={submitting}
+              onChange={(event) => setSitemapInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && sitemapInput.trim() && !submitting) void submit();
+              }}
+            />
+            <button disabled={!sitemapInput.trim() || submitting} onClick={() => void submit()}>
+              {submitting ? "SUBMITTING…" : "SUBMIT"}
+            </button>
+          </div>
+          <small>Submitting and deleting require Full user or Owner permission for the service-account email.</small>
+          {actionSuccess && <p className="sitemap-feedback success">{actionSuccess}</p>}
+          {actionError && <p className="sitemap-feedback error">{actionError}</p>}
         </section>
         {loading ? <Skeleton variant="sitemaps" /> : error ? <ErrorCard error={error} retry={retry} /> : (
           <section className="card sitemap-table">
-            <div className="card-heading"><h2>Submitted sitemaps</h2><span>≡</span></div>
-            <table>
-              <thead><tr><th>Sitemap</th><th>Type</th><th>Submitted　↓</th><th>Last read</th><th>Status</th><th>Discovered pages</th><th>Discovered videos</th><th /></tr></thead>
-              <tbody>
-                {items.map((item) => {
-                  const pages = item.contents.find((content) => content.type === "web")?.submitted ?? "0";
-                  const videos = item.contents.find((content) => content.type === "video")?.submitted ?? "0";
-                  const status = item.isPending ? "Pending" : Number(item.errors ?? 0) > 0 ? "Has errors" : "Success";
-                  return (
-                    <tr key={item.path}>
-                      <td>{item.path.replace(prefix.replace(/\/$/, ""), "") || item.path}</td>
-                      <td>{item.isSitemapsIndex ? "Sitemap index" : (item.type ?? "Sitemap")}</td>
-                      <td>{formatDate(item.lastSubmitted)}</td>
-                      <td>{formatDate(item.lastDownloaded)}</td>
-                      <td className={status === "Success" ? "success" : "orange"}>{status}</td>
-                      <td>{pages}</td><td>{videos}</td><td>⋮</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="card-heading"><h2>Submitted sitemaps</h2><span>{items.length} total</span></div>
+            <div className="sitemap-table-wrap">
+              <table>
+                <thead><tr><th>Sitemap</th><th>Type</th><th>Submitted　↓</th><th>Last read</th><th>Status</th><th>Submitted URLs</th><th>Indexed URLs</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {visibleItems.map((item) => {
+                    const submitted = item.contents.reduce((total, content) => total + Number(content.submitted ?? 0), 0);
+                    const indexed = item.contents.reduce((total, content) => total + Number(content.indexed ?? 0), 0);
+                    const errors = Number(item.errors ?? 0);
+                    const warnings = Number(item.warnings ?? 0);
+                    const status = item.isPending ? "Pending" : errors > 0 ? `${errors} errors` : warnings > 0 ? `${warnings} warnings` : "Success";
+                    const contentTypes = [...new Set(item.contents.map((content) => content.type).filter(Boolean))].join(", ");
+                    return (
+                      <tr key={item.path}>
+                        <td title={item.path}>{item.path.replace(prefix.replace(/\/$/, ""), "") || item.path}</td>
+                        <td>{item.isSitemapsIndex ? "Sitemap index" : (contentTypes || item.type || "Sitemap")}</td>
+                        <td>{formatDateTime(item.lastSubmitted)}</td>
+                        <td>{formatDateTime(item.lastDownloaded)}</td>
+                        <td><span className={`sitemap-status ${status === "Success" ? "success" : errors > 0 ? "error" : "warning"}`}>{status}</span></td>
+                        <td>{formatCompact(submitted)}</td>
+                        <td>{formatCompact(indexed)}</td>
+                        <td>
+                          <div className="sitemap-actions">
+                            <button title="View sitemap details" onClick={() => void openDetails(item)}>Details</button>
+                            <button className="delete" title="Delete sitemap" disabled={actionPath === item.path} onClick={() => void remove(item)}>
+                              {actionPath === item.path ? "Deleting…" : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
             {items.length === 0 && <div className="empty-state">No submitted sitemaps found.</div>}
-            <div className="pagination">Rows per page:　10　<AppIcon name="chevron" className="caret-down" />　　 1–{items.length} of {items.length}　　‹　›</div>
+            <div className="pagination">
+              <label>Rows per page:
+                <select value={rowsPerPage} onChange={(event) => setRowsPerPage(Number(event.target.value))}>
+                  {[10, 25, 50, 100].map((count) => <option key={count} value={count}>{count}</option>)}
+                </select>
+              </label>
+              <span>{items.length ? start + 1 : 0}–{Math.min(start + rowsPerPage, items.length)} of {items.length}</span>
+              <button disabled={currentPage === 1} onClick={() => setPageNumber((value) => Math.max(1, value - 1))}>‹</button>
+              <button disabled={currentPage === totalPages} onClick={() => setPageNumber((value) => Math.min(totalPages, value + 1))}>›</button>
+            </div>
           </section>
+        )}
+      </div>
+      {detailsPath && (
+        <div className="modal-backdrop" onMouseDown={() => {
+          setDetailsPath("");
+          setDetails(undefined);
+        }}>
+          <section className="sitemap-detail-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="sitemap-detail-heading">
+              <div><span>Sitemap details</span><h2>{detailsPath}</h2></div>
+              <button aria-label="Close sitemap details" onClick={() => {
+                setDetailsPath("");
+                setDetails(undefined);
+              }}>×</button>
+            </div>
+            {detailsLoading || !details ? <Skeleton variant="sitemaps" /> : (
+              <>
+                <div className="sitemap-detail-grid">
+                  <div><span>Last submitted</span><b>{formatDateTime(details.lastSubmitted)}</b></div>
+                  <div><span>Last downloaded</span><b>{formatDateTime(details.lastDownloaded)}</b></div>
+                  <div><span>Status</span><b>{details.isPending ? "Pending" : Number(details.errors ?? 0) > 0 ? "Has errors" : "Success"}</b></div>
+                  <div><span>Sitemap format</span><b>{details.isSitemapsIndex ? "Sitemap index" : "Normal sitemap"}</b></div>
+                  <div><span>Warnings</span><b>{details.warnings ?? "0"}</b></div>
+                  <div><span>Errors</span><b>{details.errors ?? "0"}</b></div>
+                </div>
+                <div className="sitemap-content-details">
+                  <h3>Sitemap content</h3>
+                  <table>
+                    <thead><tr><th>Content type</th><th>Submitted URLs</th><th>Indexed URLs</th></tr></thead>
+                    <tbody>
+                      {details.contents.map((content, index) => (
+                        <tr key={`${content.type}-${index}`}><td>{content.type ?? "Unknown"}</td><td>{content.submitted ?? "0"}</td><td>{content.indexed ?? "0"}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {details.contents.length === 0 && <p>No content counters were returned for this sitemap.</p>}
+                </div>
+                {actionError && <p className="sitemap-feedback error sitemap-detail-error">{actionError}</p>}
+                <div className="sitemap-detail-actions">
+                  <button className="delete" disabled={actionPath === details.path} onClick={() => void remove(details)}>Delete sitemap</button>
+                  <button onClick={() => {
+                    setDetailsPath("");
+                    setDetails(undefined);
+                  }}>Close</button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+const INSPECTION_ENUM_PREFIX = /^(VERDICT|PAGE_FETCH_STATE|ROBOTS_TXT_STATE|INDEXING_STATE|CRAWLING_USER_AGENT|AMP_INDEXING_STATE)_/;
+
+function inspectionEnum(value?: string) {
+  return (value ?? "").replace(INSPECTION_ENUM_PREFIX, "");
+}
+
+function inspectionText(value?: string) {
+  if (!value) return "Not provided";
+  return inspectionEnum(value)
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function inspectionTone(value?: string) {
+  const state = inspectionEnum(value);
+  if (state === "PASS" || state === "SUCCESSFUL" || state === "ALLOWED" || state === "INDEXING_ALLOWED" || state === "AMP_INDEXING_ALLOWED") return "good";
+  if (state === "FAIL" || state.startsWith("BLOCKED") || state === "DISALLOWED" || state === "SERVER_ERROR" || state === "NOT_FOUND") return "bad";
+  if (state === "PARTIAL") return "warning";
+  return "neutral";
+}
+
+function InspectionIssues({ issues }: { issues?: InspectionIssue[] }) {
+  if (!issues?.length) return <p className="inspection-no-issues">No issues reported.</p>;
+  return (
+    <ul className="inspection-issues">
+      {issues.map((issue, index) => (
+        <li key={`${issue.issueType}-${index}`} className={issue.severity?.toLowerCase()}>
+          <b>{inspectionText(issue.severity)}</b>
+          <span>{issue.message || issue.issueMessage || inspectionText(issue.issueType)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function UrlInspection({ siteUrl }: { siteUrl: string }) {
+  const [url, setUrl] = useState(siteOrigin(siteUrl));
+  const [result, setResult] = useState<UrlInspectionResult>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    requestId.current += 1;
+    setUrl(siteOrigin(siteUrl));
+    setResult(undefined);
+    setError("");
+    setLoading(false);
+  }, [siteUrl]);
+
+  async function inspect() {
+    const inspectionUrl = url.trim();
+    if (!inspectionUrl) {
+      setError("Enter a URL to inspect.");
+      return;
+    }
+    const id = ++requestId.current;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await invoke<UrlInspectionResult>("inspect_url", { siteUrl, inspectionUrl });
+      if (id !== requestId.current) return;
+      setResult(response);
+    } catch (reason) {
+      if (id !== requestId.current) return;
+      setResult(undefined);
+      setError(String(reason));
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
+  }
+
+  const index = result?.indexStatusResult;
+  const indexed = index?.verdict === "PASS";
+  const richGroups = result?.richResultsResult?.detectedItems ?? [];
+  const richIssues = richGroups.flatMap((group) => (group.items ?? []).flatMap((item) => item.issues ?? []));
+
+  return (
+    <>
+      <div className="page-title inspection-title"><h1>URL inspection</h1></div>
+      <div className="inspection-content">
+        <section className="card inspection-runner">
+          <label htmlFor="inspection-url">Inspect a URL in this property</label>
+          <div>
+            <AppIcon name="search" />
+            <input
+              id="inspection-url"
+              value={url}
+              spellCheck={false}
+              placeholder="https://example.com/page"
+              onChange={(event) => setUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !loading) void inspect();
+              }}
+            />
+            <button disabled={loading || !url.trim()} onClick={() => void inspect()}>
+              {loading ? "INSPECTING…" : "INSPECT URL"}
+            </button>
+          </div>
+          <small>This report shows Google's indexed version of the URL. The public API does not run a live URL test.</small>
+        </section>
+
+        {loading ? <Skeleton variant="overview" /> : error ? (
+          <ErrorCard title="The URL couldn't be inspected" error={error} retry={() => void inspect()} />
+        ) : !result ? (
+          <section className="card inspection-empty">
+            <div>⌕</div>
+            <h2>Inspect any URL in this property</h2>
+            <p>Check indexing, crawl, canonical, mobile usability, rich results and AMP information from Google Search Console.</p>
+          </section>
+        ) : (
+          <>
+            <section className={`card inspection-verdict ${indexed ? "indexed" : "not-indexed"}`}>
+              <div className="inspection-verdict-icon">{indexed ? "✓" : "!"}</div>
+              <div>
+                <span>Page indexing</span>
+                <h2>{indexed ? "URL is on Google" : "URL is not on Google"}</h2>
+                <p>{index?.coverageState || "Google did not provide a coverage description."}</p>
+              </div>
+              {result.inspectionResultLink && (
+                <button onClick={() => window.open(result.inspectionResultLink, "_blank", "noopener,noreferrer")}>OPEN IN SEARCH CONSOLE</button>
+              )}
+            </section>
+
+            <section className="card inspection-panel">
+              <div className="inspection-panel-heading"><h2>Indexing details</h2><span>Google index</span></div>
+              <div className="inspection-detail-grid">
+                <div><span>Coverage status</span><b>{index?.coverageState || "Not provided"}</b></div>
+                <div><span>Indexing status</span><b className={inspectionTone(index?.indexingState)}>{inspectionText(index?.indexingState)}</b></div>
+                <div><span>Last crawl</span><b>{formatDateTime(index?.lastCrawlTime)}</b></div>
+                <div><span>Page fetch</span><b className={inspectionTone(index?.pageFetchState)}>{inspectionText(index?.pageFetchState)}</b></div>
+                <div><span>Robots.txt</span><b className={inspectionTone(index?.robotsTxtState)}>{inspectionText(index?.robotsTxtState)}</b></div>
+                <div><span>Crawled as</span><b>{index?.crawledAs ? `${inspectionText(index.crawledAs)} crawler` : "Not provided"}</b></div>
+              </div>
+            </section>
+
+            <section className="card inspection-panel">
+              <div className="inspection-panel-heading"><h2>Canonical and discovery</h2><span>As reported by Google</span></div>
+              <div className="inspection-canonical">
+                <div><span>User-declared canonical</span><b>{index?.userCanonical || "Not provided"}</b></div>
+                <div><span>Google-selected canonical</span><b>{index?.googleCanonical || "Not provided"}</b></div>
+              </div>
+              <div className="inspection-discovery-grid">
+                <div>
+                  <h3>Sitemaps</h3>
+                  {index?.sitemap?.length ? <ul>{index.sitemap.map((item) => <li key={item}>{item}</li>)}</ul> : <p>No referring sitemap reported.</p>}
+                </div>
+                <div>
+                  <h3>Referring URLs</h3>
+                  {index?.referringUrls?.length ? <ul>{index.referringUrls.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Google did not provide referring URLs.</p>}
+                </div>
+              </div>
+            </section>
+
+            <div className="inspection-result-columns">
+              <section className="card inspection-panel">
+                <div className="inspection-panel-heading">
+                  <h2>Mobile usability</h2>
+                  <span className={`inspection-badge ${inspectionTone(result.mobileUsabilityResult?.verdict)}`}>{inspectionText(result.mobileUsabilityResult?.verdict)}</span>
+                </div>
+                {result.mobileUsabilityResult ? <InspectionIssues issues={result.mobileUsabilityResult.issues} /> : <p className="inspection-no-issues">Mobile usability data was not provided by Google.</p>}
+              </section>
+
+              <section className="card inspection-panel">
+                <div className="inspection-panel-heading">
+                  <h2>Rich results</h2>
+                  <span className={`inspection-badge ${inspectionTone(result.richResultsResult?.verdict)}`}>{inspectionText(result.richResultsResult?.verdict)}</span>
+                </div>
+                {richGroups.length > 0 ? (
+                  <div className="inspection-rich-types">
+                    {richGroups.map((group, index) => <span key={`${group.richResultType}-${index}`}>{group.richResultType || "Structured data"} · {group.items?.length ?? 0}</span>)}
+                  </div>
+                ) : <p className="inspection-no-issues">No rich-result types detected.</p>}
+                <InspectionIssues issues={richIssues} />
+              </section>
+            </div>
+
+            <section className="card inspection-panel">
+              <div className="inspection-panel-heading">
+                <h2>AMP</h2>
+                <span className={`inspection-badge ${inspectionTone(result.ampResult?.verdict)}`}>{result.ampResult ? inspectionText(result.ampResult.verdict) : "Not applicable"}</span>
+              </div>
+              {result.ampResult ? (
+                <>
+                  <div className="inspection-detail-grid amp">
+                    <div><span>AMP URL</span><b>{result.ampResult.ampUrl || "Not provided"}</b></div>
+                    <div><span>AMP index status</span><b>{inspectionText(result.ampResult.ampIndexStatusVerdict)}</b></div>
+                    <div><span>Indexing status</span><b>{inspectionText(result.ampResult.indexingState)}</b></div>
+                    <div><span>Page fetch</span><b>{inspectionText(result.ampResult.pageFetchState)}</b></div>
+                    <div><span>Robots.txt</span><b>{inspectionText(result.ampResult.robotsTxtState)}</b></div>
+                    <div><span>Last crawl</span><b>{formatDateTime(result.ampResult.lastCrawlTime)}</b></div>
+                  </div>
+                  <InspectionIssues issues={result.ampResult.issues} />
+                </>
+              ) : <p className="inspection-no-issues">No AMP result was returned for this URL.</p>}
+            </section>
+          </>
         )}
       </div>
     </>
@@ -1688,7 +2140,7 @@ function App() {
   useEffect(() => { void loadSites(); }, [loadSites]);
   useEffect(() => {
     if (!selectedSite) return;
-    if (page === "vitals") return;
+    if (page === "vitals" || page === "inspection") return;
     if (page === "sitemaps") void loadSitemaps();
     else {
       void loadPerformance();
@@ -1714,13 +2166,14 @@ function App() {
 
   return (
     <div className={shellClass}>
-      <Header site={selectedSite} sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+      <Header site={selectedSite} sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} onInspect={() => setPage("inspection")} />
       <Sidebar page={page} sites={sites} selected={selectedSite} onSelect={setSelectedSite} onNavigate={setPage} onAddAccount={() => setAddAccountOpen(true)} />
       <main className="main">
         {loadingSites ? <div className="boot-loading"><Skeleton variant="boot" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
             page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
+                page === "inspection" ? <UrlInspection siteUrl={selectedSite.siteUrl} /> :
                 page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :
                 <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
       </main>

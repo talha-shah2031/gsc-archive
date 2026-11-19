@@ -10,6 +10,7 @@ use yup_oauth2::{ServiceAccountAuthenticator, ServiceAccountKey, read_service_ac
 use zeroize::Zeroizing;
 
 const SCOPE: &str = "https://www.googleapis.com/auth/webmasters.readonly";
+const WRITE_SCOPE: &str = "https://www.googleapis.com/auth/webmasters";
 const PAGESPEED_SCOPE: &str = "openid";
 const API_ROOT: &str = "https://searchconsole.googleapis.com/webmasters/v3";
 const PAGESPEED_API: &str =
@@ -711,6 +712,123 @@ async fn list_sitemaps(site_url: String) -> Result<Vec<Sitemap>, String> {
     .await?;
     serde_json::from_value(value.get("sitemap").cloned().unwrap_or_else(|| json!([])))
         .map_err(|error| format!("Could not decode sitemaps: {error}"))
+}
+
+fn validate_sitemap_url(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let parsed = reqwest::Url::parse(value)
+        .map_err(|_| "Enter a valid sitemap URL, for example https://example.com/sitemap.xml")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("The sitemap URL must use http or https".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn sitemap_api_path(site_url: &str, sitemap_url: &str) -> String {
+    format!(
+        "/sites/{}/sitemaps/{}",
+        urlencoding::encode(site_url),
+        urlencoding::encode(sitemap_url)
+    )
+}
+
+#[tauri::command]
+async fn get_sitemap(site_url: String, sitemap_url: String) -> Result<Sitemap, String> {
+    let sitemap_url = validate_sitemap_url(&sitemap_url)?;
+    let value = google_get(&sitemap_api_path(&site_url, &sitemap_url)).await?;
+    serde_json::from_value(value)
+        .map_err(|error| format!("Could not decode sitemap details: {error}"))
+}
+
+async fn mutate_sitemap(
+    method: reqwest::Method,
+    site_url: &str,
+    sitemap_url: &str,
+    action: &str,
+) -> Result<(), String> {
+    let key = active_service_account_key().await?;
+    let token = access_token_for_key_with_scopes(key, &[WRITE_SCOPE]).await?;
+    let response = reqwest::Client::new()
+        .request(
+            method,
+            format!("{API_ROOT}{}", sitemap_api_path(site_url, sitemap_url)),
+        )
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach Search Console: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("Could not read Google's response: {error}"))?;
+        let detail = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| value.pointer("/error/message")?.as_str().map(str::to_owned))
+            .unwrap_or(body);
+        return Err(format!(
+            "Search Console could not {action} ({status}): {detail}"
+        ));
+    }
+    response_cache().write().await.clear();
+    Ok(())
+}
+
+#[tauri::command]
+async fn submit_sitemap(site_url: String, sitemap_url: String) -> Result<(), String> {
+    let sitemap_url = validate_sitemap_url(&sitemap_url)?;
+    mutate_sitemap(
+        reqwest::Method::PUT,
+        &site_url,
+        &sitemap_url,
+        "submit the sitemap",
+    )
+    .await
+}
+
+#[tauri::command]
+async fn delete_sitemap(site_url: String, sitemap_url: String) -> Result<(), String> {
+    let sitemap_url = validate_sitemap_url(&sitemap_url)?;
+    mutate_sitemap(
+        reqwest::Method::DELETE,
+        &site_url,
+        &sitemap_url,
+        "delete the sitemap",
+    )
+    .await
+}
+
+#[tauri::command]
+async fn inspect_url(site_url: String, inspection_url: String) -> Result<Value, String> {
+    let inspection_url = inspection_url.trim().to_string();
+    let parsed = reqwest::Url::parse(&inspection_url)
+        .map_err(|_| "Enter a valid URL, for example https://example.com/page".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http and https URLs can be inspected".to_string());
+    }
+    let cache_key = format!("URL_INSPECTION:{site_url}:{inspection_url}");
+    if let Some(value) = read_cache(&cache_key).await {
+        return Ok(value);
+    }
+    let response = reqwest::Client::new()
+        .post("https://searchconsole.googleapis.com/v1/urlInspection/index:inspect")
+        .bearer_auth(access_token().await?)
+        .json(&json!({
+            "inspectionUrl": inspection_url,
+            "siteUrl": site_url,
+            "languageCode": "en-US"
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach URL Inspection: {error}"))?;
+    let value = parse_response(response).await?;
+    let result = value
+        .get("inspectionResult")
+        .cloned()
+        .ok_or_else(|| "Google did not return an inspection result for this URL".to_string())?;
+    write_cache(cache_key, result.clone()).await;
+    Ok(result)
 }
 
 const LIGHTHOUSE_METRICS: [&str; 7] = [
@@ -1466,6 +1584,10 @@ pub fn run() {
             get_performance,
             get_recommendations,
             list_sitemaps,
+            get_sitemap,
+            submit_sitemap,
+            delete_sitemap,
+            inspect_url,
             check_lighthouse_environment,
             run_lighthouse,
             run_pagespeed
@@ -1520,5 +1642,16 @@ mod tests {
         )
         .await
         .expect("service account could not calculate recommendations");
+        let inspection_url = site_url
+            .strip_prefix("sc-domain:")
+            .map(|domain| format!("https://{domain}/"))
+            .unwrap_or_else(|| site_url.clone());
+        let inspection = super::inspect_url(site_url.to_string(), inspection_url)
+            .await
+            .expect("service account could not inspect a URL");
+        assert!(
+            inspection.get("indexStatusResult").is_some(),
+            "URL inspection response did not include an index status result"
+        );
     }
 }
