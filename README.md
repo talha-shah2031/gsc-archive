@@ -10,6 +10,7 @@ A desktop Google Search Console dashboard built with Tauri, React, and TypeScrip
 - Query, page, country, device, appearance, and date breakdowns
 - CSV export
 - Data-driven performance recommendations
+- GSC-only AI analysis through OpenRouter
 - One-hour response cache
 - Secure service-account import using Windows DPAPI encryption
 - Responsive layout for smaller windows
@@ -23,6 +24,9 @@ Service-account credentials are imported through the app and never exposed to th
 - Credentials are encrypted with Windows DPAPI, scoped to the current Windows user.
 - The encrypted credential is stored in the Tauri application-data directory.
 - Plaintext credential files are never stored by the app.
+
+OpenRouter keys entered on the Ask AI page are also encrypted with Windows
+DPAPI. Alternatively, set `OPENROUTER_API_KEY` in the app's environment.
 
 The legacy `.env.json` fallback is supported only for first-run migration and is excluded from version control.
 

@@ -4,9 +4,10 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
 import SeoAudit from "./SeoAudit";
 import ContentAudit from "./ContentAudit";
+import AskAi from "./AskAi";
 import "./App.css";
 
-type Page = "overview" | "performance" | "inspection" | "seoaudit" | "contentaudit" | "sitemaps" | "vitals";
+type Page = "overview" | "aichat" | "performance" | "inspection" | "seoaudit" | "contentaudit" | "sitemaps" | "vitals";
 type Dimension = "query" | "page" | "country" | "device" | "searchAppearance" | "date";
 type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
@@ -198,6 +199,7 @@ const navGroups = [
     title: "",
     items: [
       ["overview", "home", "Overview"],
+      ["aichat", "sparkle", "Ask AI"],
       ["insights", "insights", "Insights"],
       ["performance", "performance", "Performance"],
       ["inspection", "search", "URL inspection"],
@@ -375,7 +377,7 @@ function Sidebar({
   onAddAccount: () => void;
 }) {
   const navigate = (key: string) => {
-    if (key === "overview" || key === "performance" || key === "inspection" || key === "seoaudit" || key === "contentaudit" || key === "sitemaps" || key === "vitals") onNavigate(key);
+    if (key === "overview" || key === "aichat" || key === "performance" || key === "inspection" || key === "seoaudit" || key === "contentaudit" || key === "sitemaps" || key === "vitals") onNavigate(key);
   };
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -455,11 +457,11 @@ function Sidebar({
             {group.items.map(([key, icon, label]) => (
               <button
                 key={key}
-                className={(page === key ? "active " : "") + (!["overview", "performance", "sitemaps", "vitals"].includes(key) ? "disabled" : "")}
+                className={(page === key ? "active " : "") + (!["overview", "aichat", "performance", "sitemaps", "vitals"].includes(key) ? "disabled" : "")}
                 onClick={() => navigate(key)}
               >
                 <span className="nav-icon">
-                  {["home", "insights", "performance", "search", "pages", "sitemap", "vitals", "https"].includes(icon)
+                  {["home", "insights", "performance", "search", "pages", "sitemap", "vitals", "https", "sparkle"].includes(icon)
                     ? <AppIcon name={icon as IconName} />
                     : icon}
                 </span>
@@ -2067,6 +2069,38 @@ function App() {
 
   const dates = useMemo(() => dateRange(range), [range]);
 
+  useEffect(() => {
+    let touchX = 0;
+    let touchY = 0;
+    const allowsHorizontalScroll = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest(".ai-table-wrap, .ai-code"));
+    const handleTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      touchX = touch.clientX;
+      touchY = touch.clientY;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch || allowsHorizontalScroll(event.target)) return;
+      const horizontal = Math.abs(touch.clientX - touchX);
+      const vertical = Math.abs(touch.clientY - touchY);
+      if (horizontal > vertical) event.preventDefault();
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (allowsHorizontalScroll(event.target)) return;
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) event.preventDefault();
+    };
+    document.addEventListener("touchstart", handleTouchStart, { passive: true });
+    document.addEventListener("touchmove", handleTouchMove, { passive: false });
+    document.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
+
   const loadSites = useCallback(async () => {
     setLoadingSites(true);
     setError("");
@@ -2149,7 +2183,7 @@ function App() {
   useEffect(() => { void loadSites(); }, [loadSites]);
   useEffect(() => {
     if (!selectedSite) return;
-    if (page === "vitals" || page === "inspection" || page === "seoaudit" || page === "contentaudit") return;
+    if (page === "vitals" || page === "inspection" || page === "seoaudit" || page === "contentaudit" || page === "aichat") return;
     if (page === "sitemaps") void loadSitemaps();
     else {
       void loadPerformance();
@@ -2183,6 +2217,7 @@ function App() {
             page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
               page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
                 page === "inspection" ? <UrlInspection siteUrl={selectedSite.siteUrl} /> :
+                page === "aichat" ? <AskAi key={selectedSite.siteUrl} siteUrl={selectedSite.siteUrl} siteLabel={prettySite(selectedSite.siteUrl)} startDate={dates.startDate} endDate={dates.endDate} /> :
                 page === "seoaudit" ? <SeoAudit siteUrl={selectedSite.siteUrl} /> :
                 page === "contentaudit" ? <ContentAudit siteUrl={selectedSite.siteUrl} /> :
                 page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :

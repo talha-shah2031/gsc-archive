@@ -1,0 +1,97 @@
+Official GSC API se milne wala data
+1. Search performance data
+Search Analytics API se:
+- Total clicks
+- Total impressions
+- Average CTR
+- Average position
+Data ko in dimensions se break down kar sakte hain:
+- Date
+- Search query
+- Page/URL
+- Country
+- Device
+- Search appearance
+Possible search types include:
+- Web
+- Image
+- Video
+- News
+- Discover
+- Google News
+Discover aur News data sirf tab milta hai jab property ke paas relevant data ho.
+Filters bhi apply ho sakte hain:
+- Query
+- Page
+- Country
+- Device
+- Search appearance
+- Date range
+2. Search Console properties
+Sites API se:
+- Accessible properties ki list
+- Property URL
+- Domain property ya URL-prefix property
+- User/service account ka permission level
+- Property add karna
+- Property remove karna
+Service account ko pehle GSC property mein access dena zaroori hai.
+3. Sitemap data
+Sitemaps API se:
+- Submitted sitemaps ki list
+- Sitemap URL/path
+- Last submitted time
+- Last downloaded time
+- Pending status
+- Sitemap index hai ya normal sitemap
+- Warnings
+- Errors
+- Sitemap content type
+- Sitemap mein submitted URLs count
+- Sitemap mein indexed URLs count
+Available actions:
+- Sitemap submit
+- Sitemap details get
+- Sitemap delete
+Sitemap ka indexed count poori property ke Page Indexing report ke barabar zaroori nahi hota.
+4. Individual URL inspection
+URL Inspection API se ek URL ke liye:
+- URL indexed hai ya nahi
+- Coverage status
+- Indexing status
+- Googlebot ne URL kab crawl kiya
+- Page fetch successful tha ya nahi
+- Robots.txt status
+- User-selected canonical
+- Google-selected canonical
+- URL kis sitemap mein mila
+- Referring URLs, agar Google provide kare
+- Smartphone ya desktop crawler
+- Mobile usability result
+- Rich results/schema result
+- AMP result, agar applicable ho
+Ye property ka total indexing data nahi deta. URLs ko individually inspect karna hota hai aur API quota apply hota hai.
+Official GSC API se jo data nahi milta
+Public API se ye reports directly available nahi hain:
+- Exact total indexed pages
+- Exact total not-indexed pages
+- Page Indexing historical graph
+- Indexing issue categories aur unke aggregate counts
+- Crawled – currently not indexed count
+- Discovered – currently not indexed count
+- Duplicate/canonical issue totals
+- Crawl Stats report
+- Core Web Vitals report
+- HTTPS report
+- Internal/external Links report
+- Manual Actions report
+- Security Issues report
+- Removals report
+- Google-generated recommendations/insights feed
+Alternatives
+- Core Web Vitals: Chrome UX Report API ya PageSpeed Insights API
+- Per-URL indexing: URL Inspection API
+- Sitemap coverage: Sitemaps API
+- Performance: Search Analytics API
+- Recommendations: Available performance data se app apni recommendations calculate kar sakti hai, jaise abhi kar rahi hai
+Is app mein safely sabse useful sections honge: Performance, Queries, Pages, Countries, Devices, Search Appearance, Sitemaps aur individual URL Inspection.
