@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
 import { AppIcon, type IconName } from "./Icons";
 import SeoAudit from "./SeoAudit";
 import ContentAudit from "./ContentAudit";
@@ -338,6 +339,8 @@ function Logo() {
 
 function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site?: Site; sidebarOpen?: boolean; onToggleSidebar?: () => void; onInspect?: () => void }) {
   const searchRef = useRef<HTMLDivElement>(null);
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "installing" | "up-to-date" | "error">("idle");
+  const [updateMessage, setUpdateMessage] = useState("");
   useLayoutEffect(() => {
     const search = searchRef.current;
     if (!search) return;
@@ -357,6 +360,28 @@ function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site
       window.removeEventListener("resize", update);
     };
   }, [sidebarOpen]);
+
+  const checkForUpdate = async () => {
+    setUpdateState("checking");
+    setUpdateMessage("");
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateState("available");
+        setUpdateMessage(`Update available: ${update.version}`);
+        await update.downloadAndInstall();
+        setUpdateState("up-to-date");
+        setUpdateMessage("Update installed");
+      } else {
+        setUpdateState("up-to-date");
+        setUpdateMessage("You are up to date");
+      }
+    } catch (error) {
+      setUpdateState("error");
+      setUpdateMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <header className="topbar">
       <button
@@ -380,11 +405,20 @@ function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site
         <span>Inspect any URL in "{site ? prettySite(site.siteUrl) : "your property"}"</span>
       </div>
       <div className="top-actions">
-        <button className="icon-button">?</button>
         <button className="icon-button">♙</button>
         <button className="icon-button notification">♢<b>3</b></button>
-        <button className="icon-button dots">⠿</button>
-        <div className="avatar">G</div>
+        <button
+          className="icon-button update-action"
+          onClick={() => void checkForUpdate()}
+          disabled={updateState === "checking" || updateState === "installing"}
+          aria-label="Check for app update"
+          title="Check for app update"
+        >
+          {updateState === "checking" ? "…" : updateState === "installing" ? "…" : "⟳"}
+        </button>
+        {(updateMessage || updateState !== "idle") && (
+          <span className="update-status" role="status">{updateMessage || (updateState === "up-to-date" ? "Up to date" : "")}</span>
+        )}
       </div>
     </header>
   );

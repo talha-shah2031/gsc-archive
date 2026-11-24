@@ -53,6 +53,7 @@ button { color: inherit; }
 .inspect-search span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .header-search-icon { width: 22px; height: 22px; flex: none; color: #3c4043; }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #505458; }
+.update-status { color: #0b57d0; font-size: 13px; font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notification { position: relative; }
 .notification b { position: absolute; top: 0; right: 0; background: #b3261e; color: white; font-size: 12px; border-radius: 12px; padding: 0 5px; }
 .dots { font-size: 29px; }
@@ -836,8 +837,12 @@ td { font-size: 13px; }
 .seo-empty li::before { content: "✓"; flex: none; color: #188038; font-weight: 700; }
 .seo-loading { display: flex; flex-direction: column; gap: 18px; }
 .seo-loading-note { display: flex; align-items: center; gap: 14px; padding: 20px 22px; }
+.seo-loading-text { flex: 1; min-width: 0; }
 .seo-loading-note b { font-size: 13px; font-weight: 500; }
 .seo-loading-note p { margin: 3px 0 0; color: #5f6368; font-size: 11px; }
+.seo-progress-track { width: 100%; height: 6px; margin-top: 12px; border-radius: 3px; background: #e8f0fe; overflow: hidden; }
+.seo-progress-bar { height: 100%; width: 0%; border-radius: 3px; background: #0b57d0; transition: width 0.25s ease; }
+.seo-progress-label { display: block; margin-top: 6px; color: #70757a; font-size: 10.5px; }
 .seo-loader { width: 24px; height: 24px; flex: none; border: 3px solid #d3e3fd; border-top-color: #0b57d0; border-radius: 50%; animation: seo-spin .8s linear infinite; }
 @keyframes seo-spin { to { transform: rotate(360deg); } }
 .seo-summary { display: flex; align-items: center; gap: 18px; padding: 24px 26px; border-left: 6px solid #9aa0a6; }
