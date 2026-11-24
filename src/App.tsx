@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { AppIcon, type IconName } from "./Icons";
@@ -200,7 +200,6 @@ const navGroups = [
     items: [
       ["overview", "home", "Overview"],
       ["aichat", "sparkle", "Ask AI"],
-      ["insights", "insights", "Insights"],
       ["performance", "performance", "Performance"],
       ["inspection", "search", "URL inspection"],
     ],
@@ -215,7 +214,6 @@ const navGroups = [
   {
     title: "Indexing",
     items: [
-      ["pages", "pages", "Pages"],
       ["sitemaps", "sitemap", "Sitemaps"],
     ],
   },
@@ -223,7 +221,6 @@ const navGroups = [
     title: "Experience",
     items: [
       ["vitals", "vitals", "Core Web Vitals"],
-      ["https", "https", "HTTPS"],
     ],
   },
 ] as const;
@@ -306,6 +303,17 @@ function formatDate(value?: string) {
   }).format(new Date(value));
 }
 
+function timeAgo(timestamp: number, now: number) {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 function formatDateTime(value?: string) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en", {
@@ -329,6 +337,26 @@ function Logo() {
 }
 
 function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site?: Site; sidebarOpen?: boolean; onToggleSidebar?: () => void; onInspect?: () => void }) {
+  const searchRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const search = searchRef.current;
+    if (!search) return;
+    const update = () => {
+      const zoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      const left = Math.round(search.getBoundingClientRect().left / zoom);
+      document.documentElement.style.setProperty("--search-position-left", `${left}px`);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    if (search.parentElement) observer.observe(search.parentElement);
+    if (search.previousElementSibling) observer.observe(search.previousElementSibling);
+    window.addEventListener("resize", update);
+    void document.fonts?.ready.then(update).catch(() => {});
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [sidebarOpen]);
   return (
     <header className="topbar">
       <button
@@ -339,6 +367,7 @@ function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site
       >☰</button>
       <div className="brand"><Logo /><span>Google Search Console</span></div>
       <div
+        ref={searchRef}
         className="inspect-search"
         role={onInspect ? "button" : undefined}
         tabIndex={onInspect ? 0 : undefined}
@@ -380,6 +409,7 @@ function Sidebar({
     if (key === "overview" || key === "aichat" || key === "performance" || key === "inspection" || key === "seoaudit" || key === "contentaudit" || key === "sitemaps" || key === "vitals") onNavigate(key);
   };
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -451,27 +481,43 @@ function Sidebar({
         )}
       </div>
       <nav>
-        {navGroups.map((group, groupIndex) => (
-          <section className="nav-group" key={group.title || "main"}>
-            {group.title && <div className="nav-heading"><span>{group.title}</span><b><AppIcon name="chevron" /></b></div>}
-            {group.items.map(([key, icon, label]) => (
-              <button
-                key={key}
-                className={(page === key ? "active " : "") + (!["overview", "aichat", "performance", "sitemaps", "vitals"].includes(key) ? "disabled" : "")}
-                onClick={() => navigate(key)}
-              >
-                <span className="nav-icon">
-                  {["home", "insights", "performance", "search", "pages", "sitemap", "vitals", "https", "sparkle"].includes(icon)
-                    ? <AppIcon name={icon as IconName} />
-                    : icon}
-                </span>
-                <span>{label}</span>
-                {key === "performance" && <AppIcon name="chevron" className="nav-caret" />}
-              </button>
-            ))}
-            {groupIndex < navGroups.length - 1 && <div className="nav-divider" />}
-          </section>
-        ))}
+        {navGroups.map((group, groupIndex) => {
+          const collapsed = Boolean(group.title && collapsedGroups[group.title]);
+          return (
+            <section className="nav-group" key={group.title || "main"}>
+              {group.title && (
+                <button
+                  type="button"
+                  className={"nav-heading" + (collapsed ? " collapsed" : "")}
+                  aria-expanded={!collapsed}
+                  onClick={() => setCollapsedGroups((current) => ({ ...current, [group.title]: !current[group.title] }))}
+                >
+                  <span>{group.title}</span>
+                  <b><AppIcon name="chevron" className="nav-heading-caret" /></b>
+                </button>
+              )}
+              <div className={"nav-items" + (collapsed ? " collapsed" : "")}>
+                <div className="nav-items-inner" aria-hidden={collapsed} inert={collapsed || undefined}>
+                  {group.items.map(([key, icon, label]) => (
+                    <button
+                      key={key}
+                      className={page === key ? "active" : ""}
+                      onClick={() => navigate(key)}
+                    >
+                      <span className="nav-icon">
+                        {["home", "insights", "performance", "search", "pages", "sitemap", "vitals", "https", "sparkle"].includes(icon)
+                          ? <AppIcon name={icon as IconName} />
+                          : icon}
+                      </span>
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {groupIndex < navGroups.length - 1 && <div className="nav-divider" />}
+            </section>
+          );
+        })}
       </nav>
     </aside>
   );
@@ -559,10 +605,12 @@ function LineChart({
   rows,
   overview = false,
   visibleMetrics = ["clicks", "impressions"],
+  animationKey = "",
 }: {
   rows: MetricRow[];
   overview?: boolean;
   visibleMetrics?: MetricKey[];
+  animationKey?: string;
 }) {
   const width = 1100;
   const height = overview ? 220 : 270;
@@ -578,39 +626,119 @@ function LineChart({
     const value = maxima[key] * (1 - tick);
     return key === "ctr" ? `${(value * 100).toFixed(value < .1 ? 1 : 0)}%` : key === "position" ? value.toFixed(1) : formatCompact(Math.round(value));
   };
-  const points = (key: MetricKey) =>
-    rows.map((row, index) => {
-      const x = pad.left + (index / Math.max(1, rows.length - 1)) * (width - pad.left - pad.right);
-      const y = pad.top + (1 - row[key] / maxima[key]) * (height - pad.top - pad.bottom);
-      return `${x},${y}`;
-    }).join(" ");
+  const xAt = (index: number) => rows.length <= 1
+    ? (pad.left + width - pad.right) / 2
+    : pad.left + (index / (rows.length - 1)) * (width - pad.left - pad.right);
+  const coordinates = (key: MetricKey) =>
+    rows.map((row, index) => ({
+      x: xAt(index),
+      y: pad.top + (1 - row[key] / maxima[key]) * (height - pad.top - pad.bottom),
+    }));
+  const series: { key: MetricKey; className: string; color: string }[] = [
+    { key: "clicks", className: "click-line", color: "#4285f4" },
+    { key: "impressions", className: "impression-line", color: "#673ab7" },
+    { key: "ctr", className: "ctr-line", color: "#00897b" },
+    { key: "position", className: "position-line", color: "#ef6c00" },
+  ];
+  const shownSeries = series.filter((item) => visibleMetrics.includes(item.key) && (item.key === "clicks" || !overview));
   const ticks = [0, 0.33, 0.66, 1];
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const activeIndex = hoverIndex !== null && hoverIndex < rows.length ? hoverIndex : null;
+  const hoverX = activeIndex !== null ? xAt(activeIndex) : 0;
+  const metricNames: Record<MetricKey, string> = { clicks: "Clicks", impressions: "Impressions", ctr: "CTR", position: "Position" };
+  const metricValue = (key: MetricKey, value: number) =>
+    key === "ctr" ? `${(value * 100).toFixed(1)}%` : key === "position" ? value.toFixed(1) : value.toLocaleString();
+  const handleHover = (event: ReactMouseEvent<SVGSVGElement>) => {
+    if (rows.length === 0) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    const relativeX = ((event.clientX - rect.left) / rect.width) * width;
+    const plotWidth = width - pad.left - pad.right;
+    const ratio = Math.min(1, Math.max(0, (relativeX - pad.left) / plotWidth));
+    const index = rows.length <= 1 ? 0 : Math.round(ratio * (rows.length - 1));
+    setHoverIndex((current) => (current === index ? current : index));
+  };
+  useEffect(() => {
+    setHoverIndex(null);
+  }, [animationKey, rows]);
   return (
     <div className="chart-wrap">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Search performance chart">
-        {ticks.map((tick) => {
-          const y = pad.top + tick * (height - pad.top - pad.bottom);
-          return (
-            <g key={tick}>
-              <line x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />
-              {!overview && axisMetrics[0] && <text x={pad.left - 9} y={y + 4} textAnchor="end">{axisValue(axisMetrics[0], tick)}</text>}
-              {!overview && axisMetrics[1] && <text x={width - pad.right + 9} y={y + 4}>{axisValue(axisMetrics[1], tick)}</text>}
+      <div className="chart-plot">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label="Search performance chart"
+          onMouseMove={handleHover}
+          onMouseLeave={() => setHoverIndex(null)}
+        >
+          {ticks.map((tick) => {
+            const y = pad.top + tick * (height - pad.top - pad.bottom);
+            return (
+              <g key={tick}>
+                <line x1={pad.left} x2={width - pad.right} y1={y} y2={y} className="grid-line" />
+                {!overview && axisMetrics[0] && <text x={pad.left - 9} y={y + 4} textAnchor="end">{axisValue(axisMetrics[0], tick)}</text>}
+                {!overview && axisMetrics[1] && <text x={width - pad.right + 9} y={y + 4}>{axisValue(axisMetrics[1], tick)}</text>}
+              </g>
+            );
+          })}
+          {shownSeries.map((item) => {
+            const points = coordinates(item.key);
+            if (points.length === 0) return null;
+            const elementKey = `${animationKey}-${item.className}`;
+            if (points.length === 1) {
+              const [{ x, y }] = points;
+              return (
+                <g key={elementKey} className="chart-point">
+                  <circle cx={x} cy={y} r={11} fill="none" stroke={item.color} className="chart-dot-halo" />
+                  <circle cx={x} cy={y} r={4.5} fill={item.color} className="chart-dot" />
+                </g>
+              );
+            }
+            return (
+              <polyline
+                key={elementKey}
+                points={points.map((point) => `${point.x},${point.y}`).join(" ")}
+                pathLength={1}
+                className={item.className}
+              />
+            );
+          })}
+          {activeIndex !== null && (
+            <g className="chart-hover">
+              <line x1={hoverX} x2={hoverX} y1={pad.top} y2={height - pad.bottom} className="chart-hover-line" />
+              {shownSeries.map((item) => {
+                const point = coordinates(item.key)[activeIndex];
+                return point ? <circle key={item.className} cx={point.x} cy={point.y} r={4.5} fill={item.color} className="chart-hover-dot" /> : null;
+              })}
             </g>
-          );
-        })}
-        {visibleMetrics.includes("clicks") && <polyline points={points("clicks")} className="click-line" />}
-        {!overview && visibleMetrics.includes("impressions") && <polyline points={points("impressions")} className="impression-line" />}
-        {!overview && visibleMetrics.includes("ctr") && <polyline points={points("ctr")} className="ctr-line" />}
-        {!overview && visibleMetrics.includes("position") && <polyline points={points("position")} className="position-line" />}
-        {rows.length > 0 && (
-          <>
-            {Array.from(new Set([0, 1, 2, 3, 4, 5].map((step) => Math.round(step * (rows.length - 1) / 5)))).map((index) => {
-              const x = pad.left + (index / Math.max(1, rows.length - 1)) * (width - pad.left - pad.right);
-              return <text key={index} x={x} y={height - 6} textAnchor={index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle"}>{formatDate(rows[index]?.keys[0]).replace(/, \d{4}/, "")}</text>;
-            })}
-          </>
+          )}
+          {rows.length > 0 ? (
+            <>
+              {Array.from(new Set([0, 1, 2, 3, 4, 5].map((step) => Math.round(step * (rows.length - 1) / 5)))).map((index) => (
+                <text key={index} x={xAt(index)} y={height - 6} textAnchor={rows.length === 1 ? "middle" : index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle"}>{formatDate(rows[index]?.keys[0]).replace(/, \d{4}/, "")}</text>
+              ))}
+            </>
+          ) : (
+            <text className="chart-empty" x={width / 2} y={height / 2} textAnchor="middle">No data for this period</text>
+          )}
+        </svg>
+        {activeIndex !== null && rows[activeIndex] && (
+          <div className="chart-tooltip" style={{ left: `clamp(124px, ${(hoverX / width) * 100}%, calc(100% - 124px))` }} role="status">
+            <span className="chart-tooltip-date">{formatDate(rows[activeIndex].keys[0])}</span>
+            {shownSeries.map((item) => (
+              <div className="chart-tooltip-row" key={item.className}>
+                <i style={{ background: item.color }} />
+                <span>{metricNames[item.key]}</span>
+                <b>{metricValue(item.key, rows[activeIndex][item.key])}</b>
+              </div>
+            ))}
+          </div>
         )}
-      </svg>
+      </div>
     </div>
   );
 }
@@ -783,6 +911,7 @@ function Performance({
   setSearchType,
   setPerformanceFilter,
   retry,
+  lastUpdated,
 }: {
   data?: PerformanceData;
   loading: boolean;
@@ -797,6 +926,7 @@ function Performance({
   setSearchType: (searchType: SearchType) => void;
   setPerformanceFilter: (filter?: PerformanceFilter) => void;
   retry: () => void;
+  lastUpdated?: number;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [searchTypeOpen, setSearchTypeOpen] = useState(false);
@@ -817,6 +947,11 @@ function Performance({
   });
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [pageNumber, setPageNumber] = useState(1);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const searchTypes: { key: SearchType; label: string }[] = [
     { key: "web", label: "Web (text)" },
@@ -894,6 +1029,9 @@ function Performance({
     }
     return weekly;
   }, [data, granularity]);
+  const dataSignature = data
+    ? `${data.daily[0]?.keys[0] ?? ""}|${data.daily.length}|${data.summary.clicks}|${data.summary.impressions}|${granularity}`
+    : "";
   const totalPages = Math.max(1, Math.ceil(rows.length / rowsPerPage));
   const currentPage = Math.min(pageNumber, totalPages);
   const start = (currentPage - 1) * rowsPerPage;
@@ -955,7 +1093,7 @@ function Performance({
     URL.revokeObjectURL(link.href);
   };
   return (
-    <>
+    <div className="performance-page">
       <div className="page-title performance-title"><h1>Performance</h1><button onClick={exportCsv}>⬇　EXPORT</button></div>
       <div className="filter-bar performance-filter-bar">
         <div className="range-buttons">
@@ -1041,12 +1179,12 @@ function Performance({
           </div>}
         </div>
         <button className="reset-filters" onClick={() => setPerformanceFilter(undefined)}>Reset filters</button>
-        <span className="last-update">Final data through 3 days ago</span>
+        <span className="last-update">Last update: {lastUpdated ? timeAgo(lastUpdated, now) : "—"}</span>
       </div>
-      <div className="performance-content">
-        {loading ? <Skeleton variant="performance" /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
+      <div className={"performance-content" + (loading && data ? " is-refreshing" : "")}>
+        {loading && !data ? <Skeleton variant="performance" /> : error ? <ErrorCard error={error} retry={retry} /> : data && (
           <>
-            <section className="card report-card">
+            <section className="card report-card" key={dataSignature}>
               <select className="granularity-select" value={granularity} onChange={(event) => setGranularity(event.target.value as "daily" | "weekly")}>
                 <option value="daily">Daily</option>
                 <option value="weekly" disabled={range < 28}>Weekly</option>
@@ -1061,7 +1199,7 @@ function Performance({
                 <span>{visibleMetrics[0] ? metricLabels[visibleMetrics[0]] : "Daily performance"}</span>
                 <span>{visibleMetrics[1] ? metricLabels[visibleMetrics[1]] : rangeLabel(range)}</span>
               </div>
-              <LineChart rows={chartRows} visibleMetrics={visibleMetrics} />
+              <LineChart rows={chartRows} visibleMetrics={visibleMetrics} animationKey={dataSignature} />
               <div className="performance-info">
                 <span className="info-icon">i</span>
                 <span>Get more details on your site's performance in generative AI features on Google Search</span>
@@ -1088,7 +1226,7 @@ function Performance({
                   <th><button onClick={() => changeSort("ctr")}>{sortMark("ctr")}　CTR</button></th>
                   <th><button onClick={() => changeSort("position")}>{sortMark("position")}　Position</button></th>
                 </tr></thead>
-                <tbody>
+                <tbody key={`${dimension}-${dataSignature}`}>
                   {pageRows.map((row, index) => (
                     <tr key={`${row.keys[0]}-${index}`}>
                       <td>{dimension === "date" ? formatDate(row.keys[0]) : row.keys[0]}</td>
@@ -1115,7 +1253,7 @@ function Performance({
           </>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -2057,6 +2195,7 @@ function App() {
   const [searchType, setSearchType] = useState<SearchType>("web");
   const [performanceFilter, setPerformanceFilter] = useState<PerformanceFilter>();
   const [performance, setPerformance] = useState<PerformanceData>();
+  const [lastUpdated, setLastUpdated] = useState<number>();
   const [recommendations, setRecommendations] = useState<SearchRecommendation[]>([]);
   const [sitemaps, setSitemaps] = useState<Sitemap[]>([]);
   const [loadingSites, setLoadingSites] = useState(true);
@@ -2145,6 +2284,7 @@ function App() {
         filterExpression: performanceFilter?.expression,
       });
       setPerformance(result);
+      setLastUpdated(Date.now());
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -2214,14 +2354,16 @@ function App() {
       <main className="main">
         {loadingSites ? <div className="boot-loading"><Skeleton variant="boot" /></div> :
           !selectedSite ? <div className="boot-loading"><ErrorCard error={error} retry={loadSites} /></div> :
-            page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
-              page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} /> :
-                page === "inspection" ? <UrlInspection siteUrl={selectedSite.siteUrl} /> :
-                page === "aichat" ? <AskAi key={selectedSite.siteUrl} siteUrl={selectedSite.siteUrl} siteLabel={prettySite(selectedSite.siteUrl)} startDate={dates.startDate} endDate={dates.endDate} /> :
-                page === "seoaudit" ? <SeoAudit siteUrl={selectedSite.siteUrl} /> :
-                page === "contentaudit" ? <ContentAudit siteUrl={selectedSite.siteUrl} /> :
-                page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :
-                <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
+            <div className="page-view" key={page}>
+              {page === "overview" ? <Overview data={performance} recommendations={recommendations} recommendationsLoading={loadingRecommendations} loading={loadingData} error={error} retry={retry} openPerformance={() => setPage("performance")} /> :
+                page === "performance" ? <Performance data={performance} loading={loadingData} error={error} range={range} dimension={dimension} searchType={searchType} performanceFilter={performanceFilter} siteUrl={selectedSite.siteUrl} setRange={setRange} setDimension={setDimension} setSearchType={setSearchType} setPerformanceFilter={setPerformanceFilter} retry={retry} lastUpdated={lastUpdated} /> :
+                  page === "inspection" ? <UrlInspection siteUrl={selectedSite.siteUrl} /> :
+                  page === "aichat" ? <AskAi key={selectedSite.siteUrl} siteUrl={selectedSite.siteUrl} siteLabel={prettySite(selectedSite.siteUrl)} startDate={dates.startDate} endDate={dates.endDate} /> :
+                  page === "seoaudit" ? <SeoAudit siteUrl={selectedSite.siteUrl} /> :
+                  page === "contentaudit" ? <ContentAudit siteUrl={selectedSite.siteUrl} /> :
+                  page === "vitals" ? <CoreWebVitals siteUrl={selectedSite.siteUrl} /> :
+                  <Sitemaps items={sitemaps} loading={loadingData} error={error} retry={retry} siteUrl={selectedSite.siteUrl} />}
+            </div>}
       </main>
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onImported={handleImported} />}
     </div>
