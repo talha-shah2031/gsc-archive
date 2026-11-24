@@ -4404,6 +4404,69 @@ async fn ai_chat(
     Ok(full)
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckResult {
+    pub status: String,
+    pub version: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct GitHubRelease {
+    tag_name: Option<String>,
+    name: Option<String>,
+    body: Option<String>,
+}
+
+fn version_tuple(value: &str) -> (u64, u64, u64, u64) {
+    let trimmed = value.trim_start_matches('v');
+    let (base, build) = match trimmed.split_once('-') {
+        Some((base, build)) => (base, build.parse::<u64>().unwrap_or(0)),
+        None => (trimmed, 0),
+    };
+    let numbers: Vec<u64> = base
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect();
+    let major = numbers.first().copied().unwrap_or(0);
+    let minor = numbers.get(1).copied().unwrap_or(0);
+    let patch = numbers.get(2).copied().unwrap_or(0);
+    (major, minor, patch, build)
+}
+
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.github.com/repos/talha-shah2031/gsc-archive/releases/latest")
+        .header("User-Agent", "gsc-studio")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| format!("Update check failed: {error}"))?;
+    let status = response.status();
+    let body: GitHubRelease = response
+        .json()
+        .await
+        .map_err(|error| format!("Update check failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("Update check failed: HTTP {status}"));
+    }
+    let tag = body
+        .tag_name
+        .clone()
+        .ok_or_else(|| "Update check failed: missing field version".to_string())?;
+    let latest = version_tuple(&tag);
+    let current = version_tuple(&app.package_info().version);
+    let is_newer = latest > current;
+    Ok(UpdateCheckResult {
+        status: if is_newer { "available" } else { "up-to-date" }.to_string(),
+        version: Some(tag),
+        notes: body.name.or(body.body),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -4439,7 +4502,8 @@ pub fn run() {
             set_ai_model,
             clear_ai_key,
             list_ai_models,
-            ai_chat
+            ai_chat,
+            check_for_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

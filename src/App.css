@@ -737,7 +737,8 @@ td { font-size: 13px; }
   .brand { width: 215px; }
   .brand span { font-size: 17px; }
   .brand-mark { transform: scale(.85); }
-  .top-actions .dots { display: none; }
+  .top-actions { gap: 2px; }
+  .top-actions .update-status { font-size: 12px; max-width: 110px; }
   .overview-content, .sitemap-content { width: calc(100% - 36px); margin-block: 18px; }
   .metric-cards, .skeleton-metrics { width: 100%; }
   .filter-bar { padding: 10px 18px 10px clamp(24px, 7vw, 136px); }
@@ -760,8 +761,9 @@ td { font-size: 13px; }
   .brand span { display: none; }
   .inspect-search { height: 44px; padding: 0 14px; }
   .header-search-icon { width: 18px; height: 18px; }
-  .top-actions .icon-button { display: none; }
-  .avatar { width: 34px; height: 34px; margin-left: 2px; }
+  .top-actions .icon-button:not(.update-action) { display: none; }
+  .top-actions .update-action { display: inline-flex; }
+  .top-actions .update-status { font-size: 12px; max-width: 120px; }
   .page-title { height: 56px; padding-inline: 18px; }
   .page-title::after { left: 18px; }
   .filter-bar { padding-left: 18px; }

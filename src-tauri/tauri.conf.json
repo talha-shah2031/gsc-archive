@@ -37,11 +37,10 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": {
-        "linux": "https://github.com/talha-shah2031/gsc-archive/releases/latest",
-        "macos": "https://github.com/talha-shah2031/gsc-archive/releases/latest",
-        "windows": "https://github.com/talha-shah2031/gsc-archive/releases/latest"
-      }
+      "endpoints": [
+        "https://github.com/talha-shah2031/gsc-archive/releases/latest"
+      ],
+      "pubkey": ""
     }
   }
 }

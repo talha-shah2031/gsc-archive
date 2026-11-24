@@ -1,7 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { check } from "@tauri-apps/plugin-updater";
 import { AppIcon, type IconName } from "./Icons";
 import SeoAudit from "./SeoAudit";
 import ContentAudit from "./ContentAudit";
@@ -14,6 +13,12 @@ type Range = 1 | 7 | 28 | 90 | 180 | 365 | 480;
 type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
 type MetricKey = "clicks" | "impressions" | "ctr" | "position";
 type AuditSource = "lighthouse" | "pagespeed";
+
+interface UpdateCheckResult {
+  status: string;
+  version?: string;
+  notes?: string;
+}
 
 interface PerformanceFilter {
   dimension: Exclude<Dimension, "date">;
@@ -365,13 +370,10 @@ function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site
     setUpdateState("checking");
     setUpdateMessage("");
     try {
-      const update = await check();
-      if (update) {
+      const result = await invoke<UpdateCheckResult>("check_for_update");
+      if (result.status === "available") {
         setUpdateState("available");
-        setUpdateMessage(`Update available: ${update.version}`);
-        await update.downloadAndInstall();
-        setUpdateState("up-to-date");
-        setUpdateMessage("Update installed");
+        setUpdateMessage(`Update available: ${result.version ?? ""}`);
       } else {
         setUpdateState("up-to-date");
         setUpdateMessage("You are up to date");
