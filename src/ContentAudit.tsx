@@ -360,6 +360,7 @@ export default function ContentAudit({ siteUrl }: { siteUrl: string }) {
   const [report, setReport] = useState<ContentAuditReport>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -368,6 +369,14 @@ export default function ContentAudit({ siteUrl }: { siteUrl: string }) {
     setError("");
     setLoading(false);
   }, [siteUrl]);
+
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => {
+      setProgress((current) => Math.min(97, Math.round(current + 2 + Math.random() * 2)));
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   async function runAudit() {
     const id = ++requestId.current;
@@ -388,7 +397,10 @@ export default function ContentAudit({ siteUrl }: { siteUrl: string }) {
       setReport(undefined);
       setError(String(reason));
     } finally {
-      if (id === requestId.current) setLoading(false);
+      if (id === requestId.current) {
+        setProgress(100);
+        setLoading(false);
+      }
     }
   }
 
@@ -473,12 +485,16 @@ export default function ContentAudit({ siteUrl }: { siteUrl: string }) {
           <div className="seo-loading" aria-busy="true">
             <section className="card seo-loading-note">
               <span className="seo-loader" />
-              <div>
+              <div className="seo-loading-text">
                 <b>Running content audit…</b>
                 <p>
                   Comparing content performance with the previous period
                   {inspectLimit > 0 ? ` and inspecting up to ${inspectLimit} pages` : ""}. This can take a moment.
                 </p>
+                <div className="seo-progress-track" aria-hidden="true">
+                  <div className="seo-progress-bar" style={{ width: `${progress}%` }} />
+                </div>
+                <span className="seo-progress-label">{Math.round(progress)}%</span>
               </div>
             </section>
             <section className="card skeleton-table">

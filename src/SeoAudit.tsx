@@ -346,6 +346,7 @@ export default function SeoAudit({ siteUrl }: { siteUrl: string }) {
   const [report, setReport] = useState<SeoAuditReport>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
   const requestId = useRef(0);
 
   const [techUrl, setTechUrl] = useState(siteOrigin(siteUrl));
@@ -384,6 +385,14 @@ export default function SeoAudit({ siteUrl }: { siteUrl: string }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => {
+      setProgress((current) => Math.min(97, Math.round(current + 2 + Math.random() * 2)));
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
   async function runAudit() {
     const id = ++requestId.current;
     setLoading(true);
@@ -403,7 +412,10 @@ export default function SeoAudit({ siteUrl }: { siteUrl: string }) {
       setReport(undefined);
       setError(String(reason));
     } finally {
-      if (id === requestId.current) setLoading(false);
+      if (id === requestId.current) {
+        setProgress(100);
+        setLoading(false);
+      }
     }
   }
 
@@ -510,9 +522,13 @@ export default function SeoAudit({ siteUrl }: { siteUrl: string }) {
           <div className="seo-loading" aria-busy="true">
             <section className="card seo-loading-note">
               <span className="seo-loader" />
-              <div>
+              <div className="seo-loading-text">
                 <b>Running SEO audit…</b>
                 <p>Collecting performance data, sitemap health and inspecting up to {inspectLimit} pages. This can take a moment.</p>
+                <div className="seo-progress-track" aria-hidden="true">
+                  <div className="seo-progress-bar" style={{ width: `${progress}%` }} />
+                </div>
+                <span className="seo-progress-label">{Math.round(progress)}%</span>
               </div>
             </section>
             <section className="card skeleton-table">

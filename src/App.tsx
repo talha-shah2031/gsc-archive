@@ -407,7 +407,6 @@ function Header({ site, sidebarOpen = true, onToggleSidebar, onInspect }: { site
         <span>Inspect any URL in "{site ? prettySite(site.siteUrl) : "your property"}"</span>
       </div>
       <div className="top-actions">
-        <button className="icon-button">♙</button>
         <button className="icon-button notification">♢<b>3</b></button>
         <button
           className="icon-button update-action"

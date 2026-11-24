@@ -4458,7 +4458,7 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
         .clone()
         .ok_or_else(|| "Update check failed: missing field version".to_string())?;
     let latest = version_tuple(&tag);
-    let current = version_tuple(&app.package_info().version);
+    let current = version_tuple(&app.package_info().version.to_string());
     let is_newer = latest > current;
     Ok(UpdateCheckResult {
         status: if is_newer { "available" } else { "up-to-date" }.to_string(),
